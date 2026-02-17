@@ -6,7 +6,7 @@ Use Claude Code from your phone — or anywhere — over a secure VPN connection
 
 ## What This Is
 
-A set of scripts that give you full interactive Claude Code CLI access from your phone's browser. It uses [Tailscale](https://tailscale.com) to create a secure encrypted tunnel between your devices, [ttyd](https://github.com/nicm/ttyd) to serve your terminal as a web page, [tmux](https://github.com/tmux/tmux) to keep sessions alive across disconnects, and a FastAPI voice wrapper that adds a mobile-friendly UI with iOS dictation support and quick-action buttons. Everything binds exclusively to your Tailscale IP — nothing is exposed to the public internet. Works from anywhere, not just your home WiFi, as long as your Mac is awake.
+A set of scripts that give you full interactive Claude Code CLI access from your phone's browser. It uses [Tailscale](https://tailscale.com) to create a secure encrypted tunnel between your devices, [ttyd](https://github.com/tsl0922/ttyd) to serve your terminal as a web page, [tmux](https://github.com/tmux/tmux) to keep sessions alive across disconnects, and a FastAPI voice wrapper that adds a mobile-friendly UI with iOS dictation support and quick-action buttons. Everything binds exclusively to your Tailscale IP — nothing is exposed to the public internet. Works from anywhere, not just your home WiFi, as long as your Mac is awake.
 
 ## Cost
 
