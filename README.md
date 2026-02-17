@@ -137,6 +137,8 @@ All services bind exclusively to the Tailscale interface IP — they are unreach
 
 **Trade-off to be aware of:** This setup gives full terminal access to your Mac. Anyone with access to your Tailscale account could interact with your shell. If you want to limit access to just Claude Code (no raw shell), see the Future Ideas section below.
 
+**Note on ttyd auth:** ttyd supports basic auth via the `--credential` flag, which would add another layer on top of Tailscale. We haven't gotten it working reliably yet (it was causing connection failures), but it's on the list to revisit.
+
 ## Troubleshooting
 
 | Problem | Solution |
