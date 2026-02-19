@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Claude Code Remote — macOS menu bar app."""
+
+import os
+import signal
+import subprocess
+import rumps
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
+LOG_DIR = os.path.join(PROJECT_DIR, "logs")
+
+# Icon states
+ICON_GREEN = "● CC"
+ICON_GRAY = "○ CC"
+ICON_RED = "◉ CC"
+
+
+class RemoteCLIApp(rumps.App):
+    def __init__(self):
+        super().__init__(ICON_GRAY, quit_button=None)
+        self.tailscale_ip = self._get_tailscale_ip()
+
+        self.status_item = rumps.MenuItem("Status: Stopped")
+        self.status_item.set_callback(None)
+
+        self.ip_item = rumps.MenuItem(
+            f"Tailscale IP: {self.tailscale_ip or 'Not connected'}"
+        )
+        self.ip_item.set_callback(None)
+
+        self.open_voice_item = rumps.MenuItem("Open Voice UI")
+        self.open_terminal_item = rumps.MenuItem("Open Terminal")
+        self.toggle_item = rumps.MenuItem("Start Services")
+
+        log_menu = rumps.MenuItem("View Logs")
+        log_menu.add(rumps.MenuItem("ttyd.log"))
+        log_menu.add(rumps.MenuItem("voice-wrapper.log"))
+
+        self.autostart_item = rumps.MenuItem("Auto-start on Login")
+
+        quit_item = rumps.MenuItem("Quit")
+
+        self.menu = [
+            self.status_item,
+            None,
+            self.ip_item,
+            self.open_voice_item,
+            self.open_terminal_item,
+            None,
+            self.toggle_item,
+            None,
+            log_menu,
+            self.autostart_item,
+            None,
+            quit_item,
+        ]
+
+    def _get_tailscale_ip(self):
+        try:
+            result = subprocess.run(
+                ["tailscale", "ip", "-4"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return result.stdout.strip() if result.returncode == 0 else None
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return None
+
+    @rumps.clicked("Open Voice UI")
+    def open_voice_ui(self, _):
+        if self.tailscale_ip:
+            subprocess.run(["open", f"http://{self.tailscale_ip}:8080"])
+
+    @rumps.clicked("Open Terminal")
+    def open_terminal(self, _):
+        if self.tailscale_ip:
+            subprocess.run(["open", f"http://{self.tailscale_ip}:7681"])
+
+    @rumps.clicked("Start Services")
+    def toggle_services(self, _):
+        pass  # Implemented in Task 4
+
+    @rumps.clicked("ttyd.log")
+    def view_ttyd_log(self, _):
+        log_path = os.path.join(LOG_DIR, "ttyd.log")
+        if os.path.exists(log_path):
+            subprocess.run(["open", "-a", "Console", log_path])
+
+    @rumps.clicked("voice-wrapper.log")
+    def view_voice_log(self, _):
+        log_path = os.path.join(LOG_DIR, "voice-wrapper.log")
+        if os.path.exists(log_path):
+            subprocess.run(["open", "-a", "Console", log_path])
+
+    @rumps.clicked("Auto-start on Login")
+    def toggle_autostart(self, _):
+        pass  # Implemented in Task 6
+
+    @rumps.clicked("Quit")
+    def quit_app(self, _):
+        rumps.quit_application()
+
+
+if __name__ == "__main__":
+    RemoteCLIApp().run()
