@@ -131,7 +131,26 @@ class RemoteCLIApp(rumps.App):
 
     @rumps.clicked("Start Services")
     def toggle_services(self, _):
-        pass  # Implemented in Task 4
+        if self.toggle_item.title == "Start Services":
+            self._start_services()
+        else:
+            self._stop_services()
+
+    def _start_services(self):
+        start_script = os.path.join(SCRIPT_DIR, "start-remote-cli.sh")
+        subprocess.Popen(
+            [start_script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def _stop_services(self):
+        stop_script = os.path.join(SCRIPT_DIR, "stop-remote-cli.sh")
+        subprocess.run(
+            [stop_script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
     @rumps.clicked("ttyd.log")
     def view_ttyd_log(self, _):
