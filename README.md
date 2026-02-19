@@ -147,6 +147,12 @@ pip3 install rumps
 python3 scripts/menubar.py
 ```
 
+To run it in the background:
+
+```bash
+nohup python3 scripts/menubar.py &>/dev/null &
+```
+
 A "CC" icon appears in your menu bar with:
 
 - **Status indicator** — green (all healthy), gray (stopped), red (degraded)

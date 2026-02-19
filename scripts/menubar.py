@@ -56,6 +56,7 @@ class RemoteCLIApp(rumps.App):
     def __init__(self):
         super().__init__(ICON_GRAY, quit_button=None)
         self.tailscale_ip = self._get_tailscale_ip()
+        self.tailscale_dns = self._get_tailscale_dns()
 
         self.status_item = rumps.MenuItem("Status: Stopped")
         self.status_item.set_callback(None)
@@ -64,6 +65,11 @@ class RemoteCLIApp(rumps.App):
             f"Tailscale IP: {self.tailscale_ip or 'Not connected'}"
         )
         self.ip_item.set_callback(None)
+
+        self.dns_item = rumps.MenuItem(
+            f"MagicDNS: {self.tailscale_dns or 'Not available'}"
+        )
+        self.dns_item.set_callback(None)
 
         self.open_voice_item = rumps.MenuItem("Open Voice UI")
         self.open_terminal_item = rumps.MenuItem("Open Terminal")
@@ -81,6 +87,7 @@ class RemoteCLIApp(rumps.App):
             self.status_item,
             None,
             self.ip_item,
+            self.dns_item,
             self.open_voice_item,
             self.open_terminal_item,
             None,
@@ -120,12 +127,30 @@ class RemoteCLIApp(rumps.App):
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return None
 
+    def _get_tailscale_dns(self):
+        try:
+            result = subprocess.run(
+                ["tailscale", "status", "--json"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                dns_name = data.get("Self", {}).get("DNSName", "")
+                return dns_name.rstrip(".") if dns_name else None
+        except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+            pass
+        return None
+
     @rumps.timer(5)
     def health_check(self, _):
         """Poll PID files and process liveness every 5 seconds."""
         self.tailscale_ip = self._get_tailscale_ip()
+        self.tailscale_dns = self._get_tailscale_dns()
         self.ip_item.title = (
             f"Tailscale IP: {self.tailscale_ip or 'Not connected'}"
+        )
+        self.dns_item.title = (
+            f"MagicDNS: {self.tailscale_dns or 'Not available'}"
         )
 
         services = {"ttyd": False, "voice-wrapper": False, "caffeinate": False}
