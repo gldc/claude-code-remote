@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Claude Code Remote — macOS menu bar app."""
 
+import json
 import os
 import signal
 import subprocess
@@ -9,6 +10,13 @@ import rumps
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 LOG_DIR = os.path.join(PROJECT_DIR, "logs")
+
+CONFIG_DIR = os.path.expanduser("~/.config/claude-code-remote")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+
+DEFAULT_CONFIG = {
+    "auto_start_services": False,
+}
 
 # Icon states
 ICON_GREEN = "● CC"
@@ -55,6 +63,22 @@ class RemoteCLIApp(rumps.App):
             None,
             quit_item,
         ]
+
+        self.config = self._load_config()
+        if self.config["auto_start_services"]:
+            self._start_services()
+
+    def _load_config(self):
+        try:
+            with open(CONFIG_FILE) as f:
+                return {**DEFAULT_CONFIG, **json.load(f)}
+        except (FileNotFoundError, json.JSONDecodeError):
+            return dict(DEFAULT_CONFIG)
+
+    def _save_config(self, config):
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(config, f, indent=2)
 
     def _get_tailscale_ip(self):
         try:
