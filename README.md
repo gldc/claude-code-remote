@@ -12,7 +12,7 @@ Use Claude Code from your phone — or anywhere — over a secure VPN connection
 
 ## What This Is
 
-A set of scripts that give you full interactive Claude Code CLI access from your phone's browser. It uses [Tailscale](https://tailscale.com) to create a secure encrypted tunnel between your devices, [ttyd](https://github.com/tsl0922/ttyd) to serve your terminal as a web page, [tmux](https://github.com/tmux/tmux) to keep sessions alive across disconnects, and a FastAPI voice wrapper that adds a mobile-friendly UI with iOS dictation support and quick-action buttons. Everything binds exclusively to your Tailscale IP — nothing is exposed to the public internet. Works from anywhere, not just your home WiFi, as long as your Mac is awake.
+A Python package that gives you full interactive Claude Code CLI access from your phone's browser. It uses [Tailscale](https://tailscale.com) to create a secure encrypted tunnel between your devices, [ttyd](https://github.com/tsl0922/ttyd) to serve your terminal as a web page, [tmux](https://github.com/tmux/tmux) to keep sessions alive across disconnects, and a FastAPI voice wrapper that adds a mobile-friendly UI with iOS dictation support and quick-action buttons. Everything binds exclusively to your Tailscale IP — nothing is exposed to the public internet. Works from anywhere, not just your home WiFi, as long as your Mac is awake.
 
 ## Cost
 
@@ -33,7 +33,7 @@ The only ongoing cost is your existing Claude Code API usage — the remote acce
 - macOS (Apple Silicon or Intel)
 - [Homebrew](https://brew.sh)
 - [Tailscale](https://tailscale.com) account + app installed on Mac and phone (free personal plan works)
-- Python 3.9+
+- Python 3.10+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
 
 ## Set Up with Claude Code
@@ -127,7 +127,7 @@ A "CC" icon appears in your menu bar with:
 
 - **Status indicator** — green (all healthy), gray (stopped), red (degraded)
 - **Open Voice UI / Open Terminal** — one-click to open in browser
-- **Start / Stop Services** — toggles the shell scripts
+- **Start / Stop Services** — toggles the services
 - **View Logs** — opens ttyd or voice-wrapper logs in Console.app
 - **Auto-start on Login** — installs a launchd agent so the menu bar app launches at login
 
