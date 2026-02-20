@@ -6,7 +6,10 @@ import click
 from claude_code_remote import __version__
 
 
-@click.group()
+CONTEXT_SETTINGS = dict(help_option_names=["-h", "--help"])
+
+
+@click.group(context_settings=CONTEXT_SETTINGS)
 @click.version_option(version=__version__, prog_name="ccr")
 def cli():
     """Claude Code Remote — access Claude Code CLI from any device over Tailscale."""
@@ -91,10 +94,15 @@ def doctor():
 @click.option("-d", "--daemon", is_flag=True, help="Run in background.")
 def menubar(daemon):
     """Launch the macOS menu bar app."""
-    from claude_code_remote.menubar import RemoteCLIApp
-    from claude_code_remote import services
-
     if daemon:
-        services.daemonize(lambda: RemoteCLIApp().run())
+        import subprocess, sys
+        subprocess.Popen(
+            [sys.executable, "-m", "claude_code_remote.menubar"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        click.echo("Menubar app launched in background.")
     else:
+        from claude_code_remote.menubar import RemoteCLIApp
         RemoteCLIApp().run()
