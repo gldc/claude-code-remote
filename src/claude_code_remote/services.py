@@ -83,9 +83,15 @@ def start_all() -> None:
     ip = tailscale.require_ip()
     host = tailscale.get_host() or ip
 
-    # Kill existing services
+    # Kill existing services (PID files + pkill fallback)
     for name in SERVICES:
         _kill_service(name)
+    # Fallback: SIGKILL processes that might have stale/missing PID files
+    for pattern in ["ttyd --port", "claude_code_remote.voice_server"]:
+        try:
+            subprocess.run(["pkill", "-9", "-f", pattern], capture_output=True, timeout=5)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
     time.sleep(1)
 
     # Ensure tmux session
@@ -96,7 +102,7 @@ def start_all() -> None:
     _write_pid("caffeinate", caff.pid)
     print(f"caffeinate running (PID: {caff.pid})")
 
-    # ttyd
+    # ttyd (note: ttyd forks internally, so Popen parent exits quickly)
     attach_script = _create_tmux_attach_script()
     ttyd_bin = shutil.which("ttyd") or "ttyd"
     ttyd_log = open(LOG_DIR / "ttyd.log", "a")
@@ -104,8 +110,10 @@ def start_all() -> None:
         [ttyd_bin, "--port", str(TTYD_PORT), "--interface", ip] + TTYD_OPTIONS + [attach_script],
         stdout=ttyd_log, stderr=ttyd_log,
     )
-    _write_pid("ttyd", ttyd_proc.pid)
-    print(f"ttyd running (PID: {ttyd_proc.pid}) on http://{host}:{TTYD_PORT}")
+    # Wait for fork, then find the real child PID via lsof
+    time.sleep(1)
+    _update_ttyd_pid(ip)
+    print(f"ttyd running on http://{host}:{TTYD_PORT}")
 
     # Voice wrapper
     voice_log = open(LOG_DIR / "voice-wrapper.log", "a")
@@ -127,46 +135,99 @@ def start_all() -> None:
     _watchdog(ttyd_proc, ttyd_bin, ip, attach_script, ttyd_log)
 
 
+def _port_in_use(port: int, ip: str) -> bool:
+    """Check if a port is in use (ttyd may fork, so parent exits but child holds port)."""
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            return s.connect_ex((ip, port)) == 0
+    except OSError:
+        return False
+
+
 def _watchdog(ttyd_proc, ttyd_bin, ip, attach_script, ttyd_log) -> None:
     keep_running = True
 
     def _handle_signal(sig, frame):
         nonlocal keep_running
         keep_running = False
-        try:
-            ttyd_proc.terminate()
-        except OSError:
-            pass
 
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
+    # ttyd forks internally — the Popen parent exits immediately.
+    # Wait briefly for the fork, then find the real child PID.
+    try:
+        ttyd_proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass  # ttyd didn't fork (unlikely), Popen PID is correct
+
+    # Update PID file with the actual listening process
+    _update_ttyd_pid(ip)
+
+    # Poll-based watchdog: check if port is alive every 10s
     while keep_running:
-        try:
-            ttyd_proc.wait()
-        except Exception:
-            pass
+        time.sleep(10)
         if not keep_running:
             break
-        print(f"ttyd exited, restarting in 5s...")
-        time.sleep(5)
-        ttyd_proc = subprocess.Popen(
-            [ttyd_bin, "--port", str(TTYD_PORT), "--interface", ip] + TTYD_OPTIONS + [attach_script],
-            stdout=ttyd_log, stderr=ttyd_log,
-        )
-        _write_pid("ttyd", ttyd_proc.pid)
+        if not _port_in_use(TTYD_PORT, ip):
+            print("ttyd exited, restarting in 5s...")
+            time.sleep(5)
+            if not keep_running:
+                break
+            new_proc = subprocess.Popen(
+                [ttyd_bin, "--port", str(TTYD_PORT), "--interface", ip] + TTYD_OPTIONS + [attach_script],
+                stdout=ttyd_log, stderr=ttyd_log,
+            )
+            try:
+                new_proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+            _update_ttyd_pid(ip)
 
-    # Clean shutdown
-    stop_all()
+
+def _update_ttyd_pid(ip: str) -> None:
+    """Find the actual ttyd PID listening on the port and update the PID file."""
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f":{TTYD_PORT}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.stdout.strip():
+            _write_pid("ttyd", int(result.stdout.strip().split()[0]))
+    except (subprocess.TimeoutExpired, ValueError):
+        pass
 
 
 def stop_all() -> None:
     print("Stopping remote CLI services...")
+    # Kill ALL daemon/watchdog processes FIRST to prevent ttyd auto-restart
+    daemon_pid = _read_pid("daemon")
+    if daemon_pid and _is_alive(daemon_pid):
+        os.kill(daemon_pid, signal.SIGKILL)
+        (PID_DIR / "daemon.pid").unlink(missing_ok=True)
+    # Also kill any other ccr start daemons from previous runs
+    try:
+        subprocess.run(["pkill", "-9", "-f", "ccr start"], capture_output=True, timeout=5)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    time.sleep(0.5)
+    # Kill services via PID files
     for name in SERVICES:
         if _kill_service(name):
             print(f"{name} stopped")
         else:
             print(f"{name} was not running")
+    # Fallback: SIGKILL processes that might have stale/missing PID files
+    # Run twice with delay to catch anything restarted by a dying watchdog
+    for _ in range(2):
+        for pattern in ["ttyd --port", "claude_code_remote.voice_server"]:
+            try:
+                subprocess.run(["pkill", "-9", "-f", pattern], capture_output=True, timeout=5)
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
+        time.sleep(0.5)
     print()
     print("Services stopped. tmux session 'claude' is still alive.")
     print("To kill it too: tmux kill-session -t claude")
@@ -177,11 +238,17 @@ def get_status() -> dict[str, bool]:
     for name in SERVICES:
         pid = _read_pid(name)
         result[name] = pid is not None and _is_alive(pid)
+    # ttyd forks, so PID file may be stale — also check if port is in use
+    if not result.get("ttyd"):
+        ip = tailscale.get_ip()
+        if ip and _port_in_use(TTYD_PORT, ip):
+            result["ttyd"] = True
     return result
 
 
 def daemonize(target) -> None:
     """Fork into background, parent returns, child runs target()."""
+    ensure_dirs()
     pid = os.fork()
     if pid > 0:
         # Parent — write daemon PID and exit
