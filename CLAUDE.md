@@ -2,7 +2,7 @@
 
 ## What This Is
 
-This repo contains scripts to set up remote access to Claude Code CLI from a phone (or any device) over a Tailscale VPN connection. The user has cloned this repo and wants help getting it running on their Mac.
+This repo is a pip-installable Python package (`ccr` CLI) for remote access to Claude Code CLI from a phone (or any device) over a Tailscale VPN connection. The user has cloned this repo and wants help getting it running on their Mac.
 
 ## Architecture
 
@@ -33,7 +33,8 @@ claude --version        # Claude Code CLI installed?
 
 Install anything missing:
 - `brew install ttyd tmux` for ttyd and tmux
-- `pip3 install fastapi uvicorn` for Python packages
+- `pip install -e .` to install the `ccr` CLI and all Python dependencies
+- Run `ccr doctor` to verify all prerequisites are met
 - Tailscale and Claude Code CLI must be installed manually by the user
 
 ### 2. Verify Tailscale
@@ -43,29 +44,39 @@ Install anything missing:
 
 ### 3. Test the setup
 
-- Run `./scripts/start-remote-cli.sh` and verify it starts without errors
+- Run `ccr start` and verify it starts without errors
 - Confirm the output shows the Tailscale IP and both port URLs
 - Tell the user to open the Voice UI URL on their phone
 
 ### 4. Set up auto-start (if the user wants it)
 
-This requires customizing the plist file:
-
-- Get the user's macOS username: `whoami`
-- Replace every `YOUR_USERNAME` in `scripts/remote-cli.plist` with their actual username
-- Copy scripts to `~/.local/bin/remote-cli/` (launchd can't access `~/Documents/` due to macOS TCC restrictions)
-- Copy the plist to `~/Library/LaunchAgents/com.user.remote-cli.plist`
-- Load it with `launchctl load`
+- Run `ccr menubar` to launch the menu bar app
+- Click "Auto-start on Login" in the menu to install a launchd agent automatically
 
 ## Important Gotchas
 
-- **TCC restriction:** launchd agents cannot access `~/Documents/`, `~/Desktop/`, or `~/Downloads/` without Full Disk Access. Scripts must be copied to a location like `~/.local/bin/remote-cli/` for auto-start to work.
-- **tmux env vars:** The `tmux-attach.sh` script unsets Claude Code environment variables before creating the tmux session. This prevents conflicts when Claude Code tries to launch inside an existing Claude Code session.
+- **tmux env vars:** The `ccr` CLI unsets Claude Code environment variables before creating the tmux session. This prevents conflicts when Claude Code tries to launch inside an existing Claude Code session.
+- **ttyd forks:** ttyd forks internally, so `ccr` uses port-based health checks and `lsof` to track the real process. PID files alone aren't reliable for ttyd.
 - **ttyd auth:** The `--credential` flag for ttyd basic auth is not currently enabled. It was causing connection failures. Tailscale network-level security is the primary access control.
-- **Apple Silicon vs Intel:** tmux-attach.sh uses `which tmux` to auto-detect the binary path. Apple Silicon Macs use `/opt/homebrew/bin/tmux`, Intel Macs use `/usr/local/bin/tmux`.
-- **Services bind to Tailscale IP only.** If Tailscale isn't running, the start script will fail. This is intentional — never bind to `0.0.0.0`.
+- **Apple Silicon vs Intel:** The tmux and tailscale modules use `shutil.which()` to auto-detect binary paths, with fallbacks for both architectures.
+- **Services bind to Tailscale IP only.** If Tailscale isn't running, `ccr start` will fail. This is intentional — never bind to `0.0.0.0`.
+- **macOS Cocoa and fork():** The menubar daemon uses `subprocess.Popen` instead of `os.fork()` because macOS AppKit crashes in forked processes.
 
 ## File Overview
+
+| File | Purpose |
+|------|---------|
+| `src/claude_code_remote/cli.py` | Click CLI entry point — `ccr` command with start/stop/status/doctor/menubar subcommands |
+| `src/claude_code_remote/config.py` | Configuration loading/saving with XDG-compliant paths |
+| `src/claude_code_remote/tailscale.py` | Tailscale IP and MagicDNS resolution |
+| `src/claude_code_remote/tmux.py` | tmux session management — replaces tmux-attach.sh |
+| `src/claude_code_remote/voice.py` | FastAPI voice wrapper with mobile-optimized UI |
+| `src/claude_code_remote/voice_server.py` | Entry point for running voice wrapper as subprocess |
+| `src/claude_code_remote/services.py` | Service lifecycle — start, stop, status, watchdog |
+| `src/claude_code_remote/menubar.py` | macOS menu bar app (rumps) |
+| `pyproject.toml` | Package configuration with pip install support |
+
+Legacy scripts (replaced by `ccr` CLI):
 
 | File | Purpose |
 |------|---------|
