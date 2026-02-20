@@ -44,7 +44,7 @@ If you have [Claude Code](https://docs.anthropic.com/en/docs/claude-code) instal
 Help me install and set up claude-code-remote
 ```
 
-The included `CLAUDE.md` gives Claude Code all the context it needs to check your prerequisites, configure the scripts for your machine, and get everything running.
+The included `CLAUDE.md` gives Claude Code all the context it needs to check your prerequisites, install the package, and get everything running.
 
 ## Step-by-Step Setup
 
