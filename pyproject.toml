@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "claude-code-remote"
+version = "0.1.0"
+description = "Remote access to Claude Code CLI over Tailscale"
+requires-python = ">=3.10"
+dependencies = [
+    "click",
+    "fastapi",
+    "uvicorn",
+    "rumps",
+]
+
+[project.scripts]
+ccr = "claude_code_remote.cli:cli"
