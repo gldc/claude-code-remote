@@ -50,11 +50,11 @@ The included `CLAUDE.md` gives Claude Code all the context it needs to check you
 
 If you prefer to do it manually, follow these steps:
 
-### 1. Install dependencies
+### 1. Install
 
 ```bash
-brew install ttyd tmux
-pip3 install fastapi uvicorn
+pip install -e .
+ccr doctor
 ```
 
 ### 2. Set up Tailscale
@@ -69,19 +69,10 @@ tailscale ip -4
 
 This prints your Mac's Tailscale IP (like `100.x.y.z`). Save this — you'll need it.
 
-### 3. Clone this repo
+### 3. Start
 
 ```bash
-git clone https://github.com/buckle42/claude-code-remote.git
-cd claude-code-remote
-```
-
-### 4. Test it
-
-Start everything:
-
-```bash
-./scripts/start-remote-cli.sh
+ccr start
 ```
 
 You should see output like:
@@ -102,55 +93,34 @@ On your phone (with Tailscale active), open the Voice UI URL in your browser. Yo
 To stop:
 
 ```bash
-./scripts/stop-remote-cli.sh
+ccr stop
 ```
 
-### 5. Set up auto-start (optional)
+### 4. Set up auto-start (optional)
 
-If you want everything to start automatically when your Mac boots:
-
-1. Edit `scripts/remote-cli.plist` — replace every `YOUR_USERNAME` with your macOS username
-2. Copy scripts to a location outside `~/Documents/` (macOS restricts launchd access to `~/Documents/` due to TCC):
+Launch the menu bar app:
 
 ```bash
-mkdir -p ~/.local/bin/remote-cli
-cp scripts/* ~/.local/bin/remote-cli/
-chmod +x ~/.local/bin/remote-cli/*.sh
+ccr menubar
 ```
 
-3. Install the launch agent:
-
-```bash
-cp scripts/remote-cli.plist ~/Library/LaunchAgents/com.user.remote-cli.plist
-launchctl load ~/Library/LaunchAgents/com.user.remote-cli.plist
-```
-
-To unload later:
-
-```bash
-launchctl unload ~/Library/LaunchAgents/com.user.remote-cli.plist
-```
+The menubar app can manage auto-start via its menu.
 
 ## Menu Bar App
 
 A macOS menu bar app gives you one-click control over the remote CLI services.
 
-### Install
+### Install and Launch
 
 ```bash
-pip3 install rumps
-```
-
-### Launch
-
-```bash
-python3 scripts/menubar.py
+pip install -e .  # if not already installed
+ccr menubar
 ```
 
 To run it in the background:
 
 ```bash
-nohup python3 scripts/menubar.py &>/dev/null &
+ccr menubar -d
 ```
 
 A "CC" icon appears in your menu bar with:
@@ -190,7 +160,7 @@ All services bind exclusively to the Tailscale interface IP — they are unreach
 | ttyd won't start | Check if port 7681 is already in use: `lsof -i :7681` |
 | Can't connect from phone | Verify Tailscale is active on both devices: `tailscale status` |
 | Voice dictation duplicates text | Use the Voice Wrapper UI (`:8080`), not the raw terminal (`:7681`) |
-| launchd can't access ~/Documents/ | Copy scripts to `~/.local/bin/remote-cli/` (outside TCC-protected paths) |
+| Something not working | Run `ccr doctor` to diagnose common issues |
 | Claude Code env vars conflict | The `tmux-attach.sh` wrapper handles this automatically by unsetting them |
 | Connection drops when phone sleeps | Just reopen the page — auto-reconnect reloads the terminal |
 
