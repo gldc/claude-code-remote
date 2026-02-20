@@ -33,7 +33,8 @@ claude --version        # Claude Code CLI installed?
 
 Install anything missing:
 - `brew install ttyd tmux` for ttyd and tmux
-- `pip3 install fastapi uvicorn` for Python packages
+- `pip install -e .` to install the `ccr` CLI and all Python dependencies
+- Run `ccr doctor` to verify all prerequisites are met
 - Tailscale and Claude Code CLI must be installed manually by the user
 
 ### 2. Verify Tailscale
@@ -43,7 +44,7 @@ Install anything missing:
 
 ### 3. Test the setup
 
-- Run `./scripts/start-remote-cli.sh` and verify it starts without errors
+- Run `ccr start` and verify it starts without errors
 - Confirm the output shows the Tailscale IP and both port URLs
 - Tell the user to open the Voice UI URL on their phone
 
@@ -66,6 +67,20 @@ This requires customizing the plist file:
 - **Services bind to Tailscale IP only.** If Tailscale isn't running, the start script will fail. This is intentional — never bind to `0.0.0.0`.
 
 ## File Overview
+
+| File | Purpose |
+|------|---------|
+| `src/claude_code_remote/cli.py` | Click CLI entry point — `ccr` command with start/stop/status/doctor/menubar subcommands |
+| `src/claude_code_remote/config.py` | Configuration loading/saving with XDG-compliant paths |
+| `src/claude_code_remote/tailscale.py` | Tailscale IP and MagicDNS resolution |
+| `src/claude_code_remote/tmux.py` | tmux session management — replaces tmux-attach.sh |
+| `src/claude_code_remote/voice.py` | FastAPI voice wrapper with mobile-optimized UI |
+| `src/claude_code_remote/voice_server.py` | Entry point for running voice wrapper as subprocess |
+| `src/claude_code_remote/services.py` | Service lifecycle — start, stop, status, watchdog |
+| `src/claude_code_remote/menubar.py` | macOS menu bar app (rumps) |
+| `pyproject.toml` | Package configuration with pip install support |
+
+Legacy scripts (replaced by `ccr` CLI):
 
 | File | Purpose |
 |------|---------|
