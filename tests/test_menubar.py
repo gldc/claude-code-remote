@@ -219,5 +219,40 @@ class TestPollingCadence(unittest.TestCase):
             self.assertEqual(ts_ip.call_count, 2)
 
 
+class TestLaunchctl(unittest.TestCase):
+    """Important #8: plist install/uninstall must call launchctl."""
+
+    def test_install_calls_launchctl_load(self):
+        app = menubar.RemoteCLIApp.__new__(menubar.RemoteCLIApp)
+        with patch("menubar._is_tcc_protected_path", return_value=False), \
+             patch("menubar.os.makedirs"), \
+             patch("builtins.open", unittest.mock.mock_open()), \
+             patch("menubar.plistlib.dump"), \
+             patch("menubar.subprocess.run") as mock_run:
+            app._install_login_plist()
+            mock_run.assert_called_once_with(
+                ["launchctl", "load", menubar.MENUBAR_PLIST_PATH],
+                capture_output=True,
+            )
+
+    def test_uninstall_calls_launchctl_unload(self):
+        app = menubar.RemoteCLIApp.__new__(menubar.RemoteCLIApp)
+        with patch("menubar.os.path.exists", return_value=True), \
+             patch("menubar.os.remove"), \
+             patch("menubar.subprocess.run") as mock_run:
+            app._uninstall_login_plist()
+            mock_run.assert_called_once_with(
+                ["launchctl", "unload", menubar.MENUBAR_PLIST_PATH],
+                capture_output=True,
+            )
+
+
+class TestDeadCode(unittest.TestCase):
+    """Important #7: auto_start_services config should not exist."""
+
+    def test_no_auto_start_services_in_default_config(self):
+        self.assertNotIn("auto_start_services", menubar.DEFAULT_CONFIG)
+
+
 if __name__ == "__main__":
     unittest.main()

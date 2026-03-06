@@ -15,9 +15,7 @@ LOG_DIR = os.path.join(PROJECT_DIR, "logs")
 CONFIG_DIR = os.path.expanduser("~/.config/claude-code-remote")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
-DEFAULT_CONFIG = {
-    "auto_start_services": False,
-}
+DEFAULT_CONFIG = {}
 
 MENUBAR_PLIST_LABEL = "com.user.claude-code-remote-menubar"
 MENUBAR_PLIST_PATH = os.path.expanduser(
@@ -93,10 +91,6 @@ class RemoteCLIApp(rumps.App):
             None,
             quit_item,
         ]
-
-        self.config = self._load_config()
-        if self.config["auto_start_services"]:
-            self._start_services()
 
         self.autostart_item.state = self._is_login_plist_installed()
 
@@ -299,9 +293,17 @@ class RemoteCLIApp(rumps.App):
         os.makedirs(os.path.dirname(MENUBAR_PLIST_PATH), exist_ok=True)
         with open(MENUBAR_PLIST_PATH, "wb") as f:
             plistlib.dump(plist_data, f)
+        subprocess.run(
+            ["launchctl", "load", MENUBAR_PLIST_PATH],
+            capture_output=True,
+        )
 
     def _uninstall_login_plist(self):
         if os.path.exists(MENUBAR_PLIST_PATH):
+            subprocess.run(
+                ["launchctl", "unload", MENUBAR_PLIST_PATH],
+                capture_output=True,
+            )
             os.remove(MENUBAR_PLIST_PATH)
 
     @rumps.clicked("Quit")
