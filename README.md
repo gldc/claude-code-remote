@@ -1,185 +1,114 @@
 # Claude Code Remote
 
-Use Claude Code from your phone — or anywhere — over a secure VPN connection.
-
-![Architecture](architecture.svg)
-
-<p align="center">
-  <img src="screenshot-mobile.jpg" alt="Claude Code running on iPhone" width="300">
-  <br>
-  <em>Claude Code running on an iPhone via the Voice Wrapper UI</em>
-</p>
+Manage Claude Code sessions from your phone -- or anywhere -- over a secure Tailscale VPN connection.
 
 ## What This Is
 
-A Python package that gives you full interactive Claude Code CLI access from your phone's browser. It uses [Tailscale](https://tailscale.com) to create a secure encrypted tunnel between your devices, [ttyd](https://github.com/tsl0922/ttyd) to serve your terminal as a web page, [tmux](https://github.com/tmux/tmux) to keep sessions alive across disconnects, and a FastAPI voice wrapper that adds a mobile-friendly UI with iOS dictation support and quick-action buttons. Everything binds exclusively to your Tailscale IP — nothing is exposed to the public internet. Works from anywhere, not just your home WiFi, as long as your Mac is awake.
+A Python package that runs a FastAPI server on your Mac, managing Claude Code CLI as subprocesses. A companion Expo app connects to this server over Tailscale, giving you full session management from your phone: create sessions, stream output live, approve tool use, and get push notifications.
+
+```
+Expo App (Phone) --> Tailscale VPN --> Mac --> FastAPI Server --> Claude Code CLI
+                                               |
+                                          Port 8080
+                                       REST + WebSocket API
+```
 
 ## Cost
 
-This entire setup is free. Every tool used is either open-source or has a free tier:
-
 | Tool | Cost |
 |------|------|
-| [Tailscale](https://tailscale.com/pricing) | Free for personal use (up to 3 users, 100 devices). Paid plans start at $6/user/month for teams. |
-| [ttyd](https://github.com/tsl0922/ttyd) | Free and open-source |
-| [tmux](https://github.com/tmux/tmux) | Free and open-source |
+| [Tailscale](https://tailscale.com/pricing) | Free for personal use |
 | [FastAPI](https://fastapi.tiangolo.com) + [Uvicorn](https://www.uvicorn.org) | Free and open-source |
 | Claude Code CLI | Requires an [Anthropic API plan](https://www.anthropic.com/pricing) (usage-based) |
 
-The only ongoing cost is your existing Claude Code API usage — the remote access layer itself adds nothing.
+The only ongoing cost is your Claude Code API usage.
 
 ## Prerequisites
 
 - macOS (Apple Silicon or Intel)
-- [Homebrew](https://brew.sh)
-- [Tailscale](https://tailscale.com) account + app installed on Mac and phone (free personal plan works)
 - Python 3.10+
+- [Tailscale](https://tailscale.com) account + app installed on Mac and phone
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
 
-## Set Up with Claude Code
-
-If you have [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed, you can have it walk you through the setup. Just clone the repo, open Claude Code in the directory, and ask:
-
-```
-Help me install and set up claude-code-remote
-```
-
-The included `CLAUDE.md` gives Claude Code all the context it needs to check your prerequisites, install the package, and get everything running.
-
-## Step-by-Step Setup
-
-If you prefer to do it manually, follow these steps:
+## Quick Start
 
 ### 1. Install
 
 ```bash
-pip install -e .
+pip install -e ".[dev]"
 ccr doctor
 ```
 
 ### 2. Set up Tailscale
 
-- Install Tailscale on your Mac and phone
-- Sign in on both devices with the same account
-- Verify they can see each other:
+Install Tailscale on your Mac and phone, sign in with the same account:
 
 ```bash
-tailscale ip -4
+tailscale ip -4   # Should print your Mac's Tailscale IP (100.x.y.z)
 ```
 
-This prints your Mac's Tailscale IP (like `100.x.y.z`). Save this — you'll need it.
-
-### 3. Start
+### 3. Start the server
 
 ```bash
-ccr start
+ccr start         # Foreground mode, binds to Tailscale IP
+ccr start -d      # Daemon mode (background)
+ccr start --no-auth  # Local dev mode (127.0.0.1, no auth)
 ```
 
-You should see output like:
+The server starts on port 8080 by default. Open `http://<tailscale-ip>:8080/api/status` to verify.
 
-```
-Tailscale IP: 100.x.y.z
-caffeinate running (PID: 12345)
-ttyd running (PID: 12346) on http://100.x.y.z:7681
-voice wrapper running (PID: 12347) on http://100.x.y.z:8080
+### 4. Connect the Expo app
 
-=== Remote CLI Ready ===
-Terminal:  http://100.x.y.z:7681
-Voice UI:  http://100.x.y.z:8080
-```
+Install the companion Expo app on your phone and point it at your server's Tailscale address.
 
-On your phone (with Tailscale active), open the Voice UI URL in your browser. You should see a terminal with Claude Code ready to go.
+## CLI Commands
 
-To stop:
+| Command | Description |
+|---------|-------------|
+| `ccr start` | Start the API server |
+| `ccr start -d` | Start in background (daemon mode) |
+| `ccr start --no-auth` | Start without Tailscale auth (local dev) |
+| `ccr stop` | Stop the API server |
+| `ccr status` | Show server and Tailscale status |
+| `ccr doctor` | Check all prerequisites |
 
-```bash
-ccr stop
-```
+## API Endpoints
 
-### 4. Set up auto-start (optional)
-
-Launch the menu bar app:
-
-```bash
-ccr menubar
-```
-
-The menubar app can manage auto-start via its menu.
-
-## Menu Bar App
-
-A macOS menu bar app gives you one-click control over the remote CLI services.
-
-### Install and Launch
-
-```bash
-pip install -e .  # if not already installed
-ccr menubar
-```
-
-To run it in the background:
-
-```bash
-ccr menubar -d
-```
-
-A "CC" icon appears in your menu bar with:
-
-- **Status indicator** — green (all healthy), gray (stopped), red (degraded)
-- **Open Voice UI / Open Terminal** — one-click to open in browser
-- **Start / Stop Services** — toggles the services
-- **View Logs** — opens ttyd or voice-wrapper logs in Console.app
-- **Auto-start on Login** — installs a launchd agent so the menu bar app launches at login
-
-The app polls service health every 5 seconds and updates the icon automatically.
-
-## Usage Tips
-
-| Action | How |
-|--------|-----|
-| **Voice dictation** | Use the text input field at the bottom of the Voice UI — iOS dictation works natively there. Avoid dictating directly into the terminal (the raw xterm.js terminal duplicates text due to IME handling). |
-| **Quick keys** | The button bar gives you tap targets for arrow keys, Tab, Esc, Ctrl+C, Enter, and Clear — keys that are hard to hit on a phone keyboard. |
-| **Switch to your desktop** | Open any terminal on your Mac and run `tmux attach -t claude` to pick up the exact same session you were using on your phone. Both screens mirror each other. |
-| **Resume on your phone** | Hit the **Resume** button in the Voice UI to reconnect to a previous Claude Code conversation. If the resume screen gets stuck, press **Ctrl+C** twice to exit the Claude session, then hit **New** to start fresh. |
-| **New session** | Hit the **New** button to close the current Claude session and start a fresh one. |
-| **Copy output** | Hit **Copy** to open a scrollable text view of the full terminal output. You can scroll all the way up and down through the response, then long-press to select and copy. |
-| **Auto-reconnect** | When your phone wakes from sleep, the terminal iframe reloads automatically. No manual refresh needed. |
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/status` | GET | Server health check |
+| `/api/sessions` | GET, POST | List or create sessions |
+| `/api/sessions/{id}` | GET, DELETE | Get or delete a session |
+| `/api/sessions/{id}/send` | POST | Send a prompt to a session |
+| `/api/sessions/{id}/approve` | POST | Approve tool use |
+| `/api/sessions/{id}/deny` | POST | Deny tool use |
+| `/api/sessions/{id}/pause` | POST | Pause a session |
+| `/api/templates` | GET, POST | List or create templates |
+| `/api/templates/{id}` | PUT, DELETE | Update or delete a template |
+| `/api/projects` | GET | Scan for projects |
+| `/api/push/register` | POST | Register Expo push token |
+| `/api/push/settings` | GET, PUT | Manage push settings |
+| `/ws/sessions/{id}` | WS | Live session event stream |
 
 ## Security
 
-All services bind exclusively to the Tailscale interface IP — they are unreachable from the public internet and from your local network. Tailscale creates a peer-to-peer [WireGuard](https://www.wireguard.com/) encrypted tunnel between your devices, and every device on your tailnet must be authenticated via SSO. No ports are forwarded or exposed publicly.
+The server binds exclusively to the Tailscale interface IP and authenticates requests via `tailscale whois`. Nothing is exposed to the public internet or local network. Tailscale creates a peer-to-peer WireGuard encrypted tunnel between your devices.
 
-**Trade-off to be aware of:** This setup gives full terminal access to your Mac. Anyone with access to your Tailscale account could interact with your shell. If you want to limit access to just Claude Code (no raw shell), see the Future Ideas section below.
+## Configuration
 
-**Note on ttyd auth:** ttyd supports basic auth via the `--credential` flag, which would add another layer on top of Tailscale. We haven't gotten it working reliably yet (it was causing connection failures), but it's on the list to revisit.
+Config file: `~/.config/claude-code-remote/config.json`
 
-## Troubleshooting
+```json
+{
+  "port": 8080,
+  "max_concurrent_sessions": 5,
+  "scan_directories": ["~/Developer"]
+}
+```
 
-| Problem | Solution |
-|---------|----------|
-| ttyd won't start | Check if port 7681 is already in use: `lsof -i :7681` |
-| Can't connect from phone | Verify Tailscale is active on both devices: `tailscale status` |
-| Voice dictation duplicates text | Use the Voice Wrapper UI (`:8080`), not the raw terminal (`:7681`) |
-| Something not working | Run `ccr doctor` to diagnose common issues |
-| Claude Code env vars conflict | The `tmux-attach.sh` wrapper handles this automatically by unsetting them |
-| Connection drops when phone sleeps | Just reopen the page — auto-reconnect reloads the terminal |
+## Development
 
-## How It Works
-
-**Tailscale** creates an encrypted peer-to-peer tunnel between your phone and Mac using the WireGuard protocol. It requires zero network configuration — no port forwarding, no dynamic DNS, no firewall rules. The free tier covers personal use.
-
-**ttyd** turns any terminal command into a web page served over HTTP and WebSocket. In this setup, it serves a tmux session so you get a full interactive terminal in your phone's browser.
-
-**tmux** is a terminal multiplexer that keeps your Claude Code session alive even when you disconnect. Close your browser, lose your connection, or switch devices — reconnect anytime and pick up exactly where you left off.
-
-**Voice Wrapper** is a FastAPI app that wraps the ttyd terminal in a mobile-friendly page. It exists because iOS voice dictation pastes duplicate words when you dictate directly into the raw terminal (an xterm.js IME handling issue). The wrapper sidesteps this with a native text input field where dictation works correctly, then sends the text to tmux. It also adds quick-action buttons for common keys and auto-reconnect logic so the terminal reloads when your phone wakes from sleep.
-
-**caffeinate** is a macOS utility that prevents your Mac from sleeping while the services are running, so they stay available when you're away from your desk.
-
-**launchd** is the macOS service manager that can auto-start everything on boot and restart services if they crash. The included plist file handles this.
-
-## Future Ideas
-
-- Custom web chat UI wrapping `claude --output-format stream-json` (no raw terminal exposure)
-- Voice assistant mode with Web Speech API for true hands-free operation
-- Status dashboard showing active sessions and resource usage
+```bash
+pip install -e ".[dev]"
+python -m pytest tests/ -v
+```

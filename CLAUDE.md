@@ -2,87 +2,82 @@
 
 ## What This Is
 
-This repo is a pip-installable Python package (`ccr` CLI) for remote access to Claude Code CLI from a phone (or any device) over a Tailscale VPN connection. The user has cloned this repo and wants help getting it running on their Mac.
+This repo is a pip-installable Python package (`ccr` CLI) that provides a FastAPI server for managing Claude Code sessions remotely from a phone (or any device) over a Tailscale VPN connection. A companion Expo app connects to this server.
 
 ## Architecture
 
 ```
-iPhone (Browser) → Tailscale VPN → Mac → tmux → Claude Code
-                                    |
-                              ┌─────┴─────┐
-                              Port 8080    Port 7681
-                              Voice UI     Raw Terminal
+Expo App (Phone) --> Tailscale VPN --> Mac --> FastAPI Server --> Claude Code CLI
+                                               |
+                                          Port 8080
+                                       REST + WebSocket API
 ```
 
-## Helping the User Set Up
+The server manages Claude Code as subprocesses using `--output-format stream-json`, exposes REST endpoints for CRUD operations, WebSocket for live streaming, Tailscale WhoIs auth, and Expo push notifications.
 
-When the user asks for help installing or setting up this project, walk them through these steps in order. **Verify each step before moving to the next.**
+## Setup
 
 ### 1. Check prerequisites
 
-Run these checks and report what's missing:
-
 ```bash
-brew --version          # Homebrew installed?
-ttyd --version          # ttyd installed?
-tmux -V                 # tmux installed?
-python3 -c "import fastapi; import uvicorn; print('ok')"  # Python packages?
 tailscale ip -4         # Tailscale running and connected?
 claude --version        # Claude Code CLI installed?
+pip install -e ".[dev]" # Install package with dev dependencies
+ccr doctor              # Verify all prerequisites
 ```
 
-Install anything missing:
-- `brew install ttyd tmux` for ttyd and tmux
-- `pip install -e .` to install the `ccr` CLI and all Python dependencies
-- Run `ccr doctor` to verify all prerequisites are met
-- Tailscale and Claude Code CLI must be installed manually by the user
+### 2. Start the server
 
-### 2. Verify Tailscale
+```bash
+ccr start               # Foreground, binds to Tailscale IP
+ccr start -d            # Background daemon mode
+ccr start --no-auth     # Local dev mode (127.0.0.1, no Tailscale auth)
+```
 
-- Confirm `tailscale ip -4` returns an IP (like `100.x.y.z`)
-- Remind the user to install Tailscale on their phone too and sign in with the same account
+### 3. CLI Commands
 
-### 3. Test the setup
+- `ccr start` -- Start the API server
+- `ccr stop` -- Stop the API server
+- `ccr status` -- Show server status
+- `ccr doctor` -- Check prerequisites
 
-- Run `ccr start` and verify it starts without errors
-- Confirm the output shows the Tailscale IP and both port URLs
-- Tell the user to open the Voice UI URL on their phone
+## Important Notes
 
-### 4. Set up auto-start (if the user wants it)
-
-- Run `ccr menubar` to launch the menu bar app
-- Click "Auto-start on Login" in the menu to install a launchd agent automatically
-
-## Important Gotchas
-
-- **tmux env vars:** The `ccr` CLI unsets Claude Code environment variables before creating the tmux session. This prevents conflicts when Claude Code tries to launch inside an existing Claude Code session.
-- **ttyd forks:** ttyd forks internally, so `ccr` uses port-based health checks and `lsof` to track the real process. PID files alone aren't reliable for ttyd.
-- **ttyd auth:** The `--credential` flag for ttyd basic auth is not currently enabled. It was causing connection failures. Tailscale network-level security is the primary access control.
-- **Apple Silicon vs Intel:** The tmux and tailscale modules use `shutil.which()` to auto-detect binary paths, with fallbacks for both architectures.
-- **Services bind to Tailscale IP only.** If Tailscale isn't running, `ccr start` will fail. This is intentional — never bind to `0.0.0.0`.
-- **macOS Cocoa and fork():** The menubar daemon uses `subprocess.Popen` instead of `os.fork()` because macOS AppKit crashes in forked processes.
+- **Tailscale-only binding:** Server binds to Tailscale IP by default. Use `--no-auth` for local development.
+- **Environment vars:** The server unsets `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_ENTRY_VERSION`, `CLAUDE_CODE_ENV_VERSION` before spawning Claude Code subprocesses.
+- **Session persistence:** Sessions are persisted to `~/.local/state/claude-code-remote/sessions/` as JSON files.
 
 ## File Overview
 
 | File | Purpose |
 |------|---------|
-| `src/claude_code_remote/cli.py` | Click CLI entry point — `ccr` command with start/stop/status/doctor/menubar subcommands |
-| `src/claude_code_remote/config.py` | Configuration loading/saving with XDG-compliant paths |
+| `src/claude_code_remote/cli.py` | Click CLI entry point -- `ccr` command |
+| `src/claude_code_remote/server.py` | FastAPI application factory |
+| `src/claude_code_remote/server_main.py` | Entry point for daemon mode subprocess |
+| `src/claude_code_remote/routes.py` | REST API routes (sessions, templates, projects, push) |
+| `src/claude_code_remote/websocket.py` | WebSocket endpoint for session streaming |
+| `src/claude_code_remote/session_manager.py` | Core session lifecycle and Claude Code subprocess management |
+| `src/claude_code_remote/models.py` | Pydantic data models |
+| `src/claude_code_remote/auth.py` | Tailscale WhoIs authentication middleware |
+| `src/claude_code_remote/config.py` | Configuration and state directory paths |
 | `src/claude_code_remote/tailscale.py` | Tailscale IP and MagicDNS resolution |
-| `src/claude_code_remote/tmux.py` | tmux session management — replaces tmux-attach.sh |
-| `src/claude_code_remote/voice.py` | FastAPI voice wrapper with mobile-optimized UI |
-| `src/claude_code_remote/voice_server.py` | Entry point for running voice wrapper as subprocess |
-| `src/claude_code_remote/services.py` | Service lifecycle — start, stop, status, watchdog |
-| `src/claude_code_remote/menubar.py` | macOS menu bar app (rumps) |
-| `pyproject.toml` | Package configuration with pip install support |
+| `src/claude_code_remote/projects.py` | Project discovery and scanning |
+| `src/claude_code_remote/templates.py` | Template CRUD persistence |
+| `src/claude_code_remote/push.py` | Expo Push API notifications |
+| `pyproject.toml` | Package configuration |
 
-Legacy scripts (replaced by `ccr` CLI):
+## API Endpoints
 
-| File | Purpose |
-|------|---------|
-| `scripts/start-remote-cli.sh` | Starts ttyd, voice wrapper, and caffeinate. Includes watchdog for auto-restart. |
-| `scripts/stop-remote-cli.sh` | Stops all services. Preserves the tmux session. |
-| `scripts/tmux-attach.sh` | Wrapper that clears env vars and attaches to (or creates) the tmux session. |
-| `scripts/voice-wrapper.py` | FastAPI app serving the mobile-optimized UI with dictation support. |
-| `scripts/remote-cli.plist` | launchd plist for auto-start on boot. Requires `YOUR_USERNAME` replacement. |
-| `scripts/menubar.py` | macOS menu bar app wrapping start/stop scripts. Provides status, URLs, logs, auto-start. Launch in background with `nohup python3 scripts/menubar.py &>/dev/null &`. |
+- `GET /api/status` -- Server health
+- `GET/POST /api/sessions` -- List/create sessions
+- `GET/DELETE /api/sessions/{id}` -- Get/delete session
+- `POST /api/sessions/{id}/send` -- Send prompt
+- `POST /api/sessions/{id}/approve` -- Approve tool use
+- `POST /api/sessions/{id}/deny` -- Deny tool use
+- `POST /api/sessions/{id}/pause` -- Pause session
+- `GET/POST /api/templates` -- List/create templates
+- `PUT/DELETE /api/templates/{id}` -- Update/delete template
+- `GET /api/projects` -- Scan for projects
+- `POST /api/push/register` -- Register push token
+- `GET/PUT /api/push/settings` -- Push notification settings
+- `WS /ws/sessions/{id}` -- Live session stream
