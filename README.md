@@ -47,7 +47,13 @@ Install Tailscale on your Mac and phone, sign in with the same account:
 tailscale ip -4   # Should print your Mac's Tailscale IP (100.x.y.z)
 ```
 
-### 3. Start the server
+### 3. Install the approval hook
+
+```bash
+ccr install   # Registers PreToolUse hook in ~/.claude/settings.json
+```
+
+### 4. Start the server
 
 ```bash
 ccr start         # Foreground mode, binds to Tailscale IP
@@ -57,7 +63,7 @@ ccr start --no-auth  # Local dev mode (127.0.0.1, no auth)
 
 The server starts on port 8080 by default. Open `http://<tailscale-ip>:8080/api/status` to verify.
 
-### 4. Connect the Expo app
+### 5. Connect the Expo app
 
 Install the companion Expo app on your phone and point it at your server's Tailscale address.
 
@@ -71,6 +77,8 @@ Install the companion Expo app on your phone and point it at your server's Tails
 | `ccr stop` | Stop the API server |
 | `ccr status` | Show server and Tailscale status |
 | `ccr doctor` | Check all prerequisites |
+| `ccr install` | Install the CCR approval hook into Claude Code |
+| `ccr uninstall` | Remove the CCR approval hook |
 
 ## API Endpoints
 
@@ -83,12 +91,39 @@ Install the companion Expo app on your phone and point it at your server's Tails
 | `/api/sessions/{id}/approve` | POST | Approve tool use |
 | `/api/sessions/{id}/deny` | POST | Deny tool use |
 | `/api/sessions/{id}/pause` | POST | Pause a session |
+| `/api/sessions/{id}/resume` | POST | Resume a paused session |
+| `/api/sessions/{id}/archive` | POST | Archive a session |
+| `/api/sessions/{id}/unarchive` | POST | Unarchive a session |
 | `/api/templates` | GET, POST | List or create templates |
 | `/api/templates/{id}` | PUT, DELETE | Update or delete a template |
-| `/api/projects` | GET | Scan for projects |
+| `/api/projects` | GET, POST | Scan for or register projects |
 | `/api/push/register` | POST | Register Expo push token |
 | `/api/push/settings` | GET, PUT | Manage push settings |
+| `/api/internal/approval-request` | POST | Hook: request tool approval |
+| `/api/internal/statusline` | POST | Hook: receive statusline data |
 | `/ws/sessions/{id}` | WS | Live session event stream |
+
+## Tool Approval
+
+The server includes a PreToolUse hook that routes Claude Code's tool calls to your phone for approval:
+
+```bash
+ccr install    # Register the hook in ~/.claude/settings.json
+ccr uninstall  # Remove the hook
+```
+
+- **Safe tools** (Read, Glob, Grep, etc.) are auto-approved
+- **Dangerous tools** (Write, Edit, Bash) are routed to the mobile app for approval/denial
+- **Skip permissions mode** auto-approves everything (per-session toggle)
+
+## Session Info
+
+Each session tracks real-time metadata extracted from Claude Code's stream-json output:
+
+- **Model** -- current model name (e.g., `claude-opus-4-6`)
+- **Context %** -- estimated context window usage from token counts
+- **Git branch** -- current branch of the project directory
+- **Cost** -- cumulative API cost in USD
 
 ## Security
 
