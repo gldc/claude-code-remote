@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 class SessionStatus(str, Enum):
     CREATED = "created"
     RUNNING = "running"
+    IDLE = "idle"
     AWAITING_APPROVAL = "awaiting_approval"
     PAUSED = "paused"
     COMPLETED = "completed"
@@ -52,6 +53,8 @@ class SessionCreate(BaseModel):
     template_id: str | None = None
     model: str | None = None
     max_budget_usd: float | None = None
+    skip_permissions: bool = True
+    use_sandbox: bool = False
 
 
 class Session(BaseModel):
@@ -67,6 +70,13 @@ class Session(BaseModel):
     total_cost_usd: float = 0.0
     messages: list[dict[str, Any]] = Field(default_factory=list)
     error_message: str | None = None
+    archived: bool = False
+    claude_session_id: str | None = None
+    current_model: str | None = None
+    context_percent: int = 0
+    git_branch: str | None = None
+    skip_permissions: bool = True
+    use_sandbox: bool = False
 
 
 class SessionSummary(BaseModel):
@@ -80,7 +90,11 @@ class SessionSummary(BaseModel):
     created_at: datetime
     updated_at: datetime
     total_cost_usd: float
+    current_model: str | None = None
+    context_percent: int = 0
+    git_branch: str | None = None
     last_message_preview: str | None = None
+    archived: bool = False
 
 
 # --- Template ---

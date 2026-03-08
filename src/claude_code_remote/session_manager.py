@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import shutil
-import signal
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -25,14 +25,15 @@ logger = logging.getLogger(__name__)
 
 
 class SessionManager:
-    def __init__(self, session_dir: Path, max_concurrent: int = 5):
+    def __init__(self, session_dir: Path, max_concurrent: int = 5, api_url: str = ""):
         self.session_dir = session_dir
         self.max_concurrent = max_concurrent
+        self.api_url = api_url
         self.sessions: dict[str, Session] = {}
         self.processes: dict[str, asyncio.subprocess.Process] = {}
         self.ws_subscribers: dict[str, list[Callable]] = {}
-        self._approval_events: dict[str, asyncio.Event] = {}
-        self._approval_responses: dict[str, bool] = {}
+        # Queue of futures per session — supports multiple concurrent approvals
+        self.pending_approvals: dict[str, list[asyncio.Future]] = {}
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
     def create_session(self, req: SessionCreate) -> Session:
@@ -52,6 +53,8 @@ class SessionManager:
             model=req.model,
             max_budget_usd=req.max_budget_usd,
             template_id=req.template_id,
+            skip_permissions=req.skip_permissions,
+            use_sandbox=req.use_sandbox,
         )
         self.sessions[session.id] = session
         self.persist_session(session.id)
@@ -61,12 +64,15 @@ class SessionManager:
         self,
         status: SessionStatus | None = None,
         project_dir: str | None = None,
+        archived: bool | None = None,
     ) -> list[SessionSummary]:
         results = []
         for s in self.sessions.values():
             if status and s.status != status:
                 continue
             if project_dir and s.project_dir != project_dir:
+                continue
+            if archived is not None and s.archived != archived:
                 continue
             preview = None
             if s.messages:
@@ -82,10 +88,22 @@ class SessionManager:
                     created_at=s.created_at,
                     updated_at=s.updated_at,
                     total_cost_usd=s.total_cost_usd,
+                    current_model=s.current_model,
+                    context_percent=s.context_percent,
+                    git_branch=s.git_branch,
                     last_message_preview=preview,
+                    archived=s.archived,
                 )
             )
         return results
+
+    def archive_session(self, session_id: str, archived: bool = True) -> None:
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+        session.archived = archived
+        session.updated_at = datetime.now(timezone.utc)
+        self.persist_session(session_id)
 
     def get_session(self, session_id: str) -> Session | None:
         return self.sessions.get(session_id)
@@ -126,15 +144,18 @@ class SessionManager:
             except ProcessLookupError:
                 pass
 
-    async def start_session(
-        self,
-        session_id: str,
-        initial_prompt: str,
-        on_event: Callable[[WSMessage], Any] | None = None,
-    ) -> None:
+    async def send_prompt(self, session_id: str, prompt: str) -> None:
+        """Send a prompt by spawning a per-turn claude process.
+
+        Uses `-p` for single-turn execution and `--resume` to carry
+        conversation context from previous turns.
+        """
         session = self.sessions.get(session_id)
         if not session:
             raise ValueError(f"Session {session_id} not found")
+
+        # Stop any existing process for this session
+        self._stop_process(session_id)
 
         claude_bin = shutil.which("claude")
         if not claude_bin:
@@ -143,13 +164,29 @@ class SessionManager:
         cmd = [
             claude_bin,
             "-p",
+            prompt,
             "--output-format",
             "stream-json",
-            "--input-format",
-            "stream-json",
             "--verbose",
-            "--no-session-persistence",
         ]
+
+        if session.skip_permissions:
+            cmd.append("--dangerously-skip-permissions")
+        else:
+            cmd.extend(
+                [
+                    "--allowedTools",
+                    "Read,Write,Edit,MultiEdit,Bash,Glob,Grep,WebFetch,WebSearch,"
+                    "Agent,Task,TaskOutput,NotebookEdit",
+                ]
+            )
+        if session.use_sandbox:
+            cmd.append("--sandbox")
+
+        # Resume previous conversation if we have a Claude session ID
+        if session.claude_session_id:
+            cmd.extend(["--resume", session.claude_session_id])
+
         if session.model:
             cmd.extend(["--model", session.model])
         if session.max_budget_usd:
@@ -163,72 +200,164 @@ class SessionManager:
             "CLAUDE_CODE_ENV_VERSION",
         ]:
             env.pop(key, None)
+        if session.skip_permissions:
+            env["CLAUDE_APPROVAL_FAIL_MODE"] = "allow"
+            env["CCR_SKIP_APPROVAL"] = "1"
+
+        # Set env vars for the CCR approval hook and statusline
+        env["CCR_SESSION_ID"] = session_id
+        if self.api_url:
+            env["CCR_API_URL"] = self.api_url
+
+        logger.info(f"[session {session_id}] CMD: {' '.join(cmd)}")
+        logger.info(f"[session {session_id}] CWD: {session.project_dir}")
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
-            initial_prompt,
-            stdin=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=session.project_dir,
             env=env,
+            limit=10 * 1024 * 1024,  # 10 MB — Claude can emit large JSON lines
         )
         self.processes[session_id] = proc
         session.status = SessionStatus.RUNNING
         session.updated_at = datetime.now(timezone.utc)
+
+        # Capture git branch
+        try:
+            branch = subprocess.run(
+                ["git", "-C", session.project_dir, "branch", "--show-current"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            ).stdout.strip()
+            if branch:
+                session.git_branch = branch
+        except Exception:
+            pass
+
         self.persist_session(session_id)
 
-        asyncio.create_task(self._read_output(session_id, proc, on_event))
+        logger.info(
+            f"[session {session_id}] PID={proc.pid} "
+            f"(claude_session={session.claude_session_id or 'new'})"
+        )
+
+        asyncio.create_task(self._read_output(session_id, proc))
+        asyncio.create_task(self._read_stderr(session_id, proc))
 
     async def _read_output(
         self,
         session_id: str,
         proc: asyncio.subprocess.Process,
-        on_event: Callable[[WSMessage], Any] | None,
     ) -> None:
         session = self.sessions.get(session_id)
         if not session or not proc.stdout:
+            logger.error(f"[session {session_id}] No session or stdout")
             return
 
-        async for line in proc.stdout:
-            text = line.decode().strip()
-            if not text:
-                continue
-            try:
-                event = json.loads(text)
-            except json.JSONDecodeError:
-                continue
+        logger.info(f"[session {session_id}] Starting output reader")
+        try:
+            while True:
+                line = await proc.stdout.readline()
+                if not line:
+                    break
+                text = line.decode().strip()
+                if not text:
+                    continue
+                logger.info(f"[session {session_id}] STDOUT: {text[:200]}")
+                try:
+                    event = json.loads(text)
+                except json.JSONDecodeError:
+                    logger.warning(f"[session {session_id}] Bad JSON: {text[:200]}")
+                    continue
 
-            ws_msg = self._parse_event(event)
-            if ws_msg:
-                session.messages.append(ws_msg.model_dump(mode="json"))
-                session.updated_at = datetime.now(timezone.utc)
-                if on_event:
-                    await on_event(ws_msg) if asyncio.iscoroutinefunction(
-                        on_event
-                    ) else on_event(ws_msg)
-                await self._broadcast(session_id, ws_msg)
-
-            if event.get("type") == "result":
-                cost = event.get("total_cost_usd", 0)
-                session.total_cost_usd = cost
-                subtype = event.get("subtype", "")
-                if subtype == "success":
-                    session.status = SessionStatus.COMPLETED
+                parsed = self._parse_event(event)
+                if parsed:
+                    ws_msgs = parsed if isinstance(parsed, list) else [parsed]
+                    for ws_msg in ws_msgs:
+                        session.messages.append(ws_msg.model_dump(mode="json"))
+                        await self._broadcast(session_id, ws_msg)
+                    session.updated_at = datetime.now(timezone.utc)
                 else:
-                    session.status = SessionStatus.ERROR
-                    session.error_message = event.get("result", "Unknown error")
-                session.updated_at = datetime.now(timezone.utc)
-                self.persist_session(session_id)
+                    logger.debug(
+                        f"[session {session_id}] Skipped event type: {event.get('type')}"
+                    )
+
+                # Extract model name from assistant events
+                if event.get("type") == "assistant":
+                    msg = event.get("message", {})
+                    model_id = msg.get("model")
+                    if model_id:
+                        session.current_model = model_id
+
+                # Capture session ID, cost, and context from result event
+                if event.get("type") == "result":
+                    claude_sid = event.get("session_id")
+                    if claude_sid:
+                        session.claude_session_id = claude_sid
+                        logger.info(
+                            f"[session {session_id}] Captured claude session: {claude_sid}"
+                        )
+
+                    cost = event.get("total_cost_usd", 0)
+                    session.total_cost_usd = cost
+
+                    # Calculate context usage from modelUsage
+                    model_usage = event.get("modelUsage", {})
+                    for model_id, usage in model_usage.items():
+                        ctx_window = usage.get("contextWindow", 0)
+                        if ctx_window > 0:
+                            total_tokens = (
+                                usage.get("inputTokens", 0)
+                                + usage.get("outputTokens", 0)
+                                + usage.get("cacheReadInputTokens", 0)
+                                + usage.get("cacheCreationInputTokens", 0)
+                            )
+                            session.context_percent = int(
+                                (total_tokens / ctx_window) * 100
+                            )
+
+                    session.updated_at = datetime.now(timezone.utc)
+                    self.persist_session(session_id)
+        except Exception as e:
+            logger.error(
+                f"[session {session_id}] Output reader error: {e}", exc_info=True
+            )
 
         await proc.wait()
+        logger.info(
+            f"[session {session_id}] Process exited with code {proc.returncode}"
+        )
+
+        # Process exit = turn complete
         if session.status == SessionStatus.RUNNING:
-            session.status = SessionStatus.ERROR
-            session.error_message = f"Process exited with code {proc.returncode}"
+            if proc.returncode == 0:
+                session.status = SessionStatus.IDLE
+            else:
+                session.status = SessionStatus.ERROR
+                session.error_message = f"Process exited with code {proc.returncode}"
             session.updated_at = datetime.now(timezone.utc)
             self.persist_session(session_id)
+        self.processes.pop(session_id, None)
 
-    def _parse_event(self, event: dict) -> WSMessage | None:
+    async def _read_stderr(
+        self,
+        session_id: str,
+        proc: asyncio.subprocess.Process,
+    ) -> None:
+        if not proc.stderr:
+            logger.info(f"[session {session_id}] No stderr pipe")
+            return
+        logger.info(f"[session {session_id}] Stderr reader started")
+        async for line in proc.stderr:
+            text = line.decode().strip()
+            if text:
+                logger.info(f"[session {session_id}] STDERR: {text}")
+
+    def _parse_event(self, event: dict) -> list[WSMessage] | WSMessage | None:
         etype = event.get("type")
 
         if etype == "assistant":
@@ -254,17 +383,15 @@ class SessionManager:
                             },
                         )
                     )
-            return (
-                messages[0] if len(messages) == 1 else messages[0] if messages else None
-            )
+            if not messages:
+                return None
+            return messages if len(messages) > 1 else messages[0]
 
         elif etype == "result":
             return WSMessage(
                 type=WSMessageType.STATUS_CHANGE,
                 data={
-                    "status": "completed"
-                    if event.get("subtype") == "success"
-                    else "error",
+                    "status": "idle" if event.get("subtype") == "success" else "error",
                     "cost_usd": event.get("total_cost_usd", 0),
                     "duration_ms": event.get("duration_ms", 0),
                     "result": event.get("result", ""),
@@ -279,35 +406,82 @@ class SessionManager:
 
         return None
 
-    async def send_prompt(self, session_id: str, prompt: str) -> None:
-        proc = self.processes.get(session_id)
-        if not proc or not proc.stdin:
-            raise ValueError(f"No active process for session {session_id}")
-        msg = json.dumps({"type": "user", "content": prompt}) + "\n"
-        proc.stdin.write(msg.encode())
-        await proc.stdin.drain()
+    async def request_approval(
+        self,
+        session_id: str,
+        tool_name: str,
+        tool_input: dict,
+    ) -> dict:
+        """Called by the hook script. Blocks until user approves/denies."""
+        session = self.sessions.get(session_id)
+        if not session:
+            return {"approved": True}
+
+        session.status = SessionStatus.AWAITING_APPROVAL
+        session.updated_at = datetime.now(timezone.utc)
+        self.persist_session(session_id)
+
+        # Broadcast approval request to connected clients
+        ws_msg = WSMessage(
+            type=WSMessageType.APPROVAL_REQUEST,
+            data={
+                "tool_name": tool_name,
+                "tool_input": tool_input,
+                "description": f"{tool_name} wants to run",
+            },
+        )
+        session.messages.append(ws_msg.model_dump(mode="json"))
+        await self._broadcast(session_id, ws_msg)
+
+        # Create a future and wait for the user's decision
+        loop = asyncio.get_event_loop()
+        future: asyncio.Future = loop.create_future()
+        self.pending_approvals.setdefault(session_id, []).append(future)
+
+        try:
+            result = await asyncio.wait_for(future, timeout=300)
+        except asyncio.TimeoutError:
+            result = {"approved": False, "reason": "Approval timed out"}
+        finally:
+            queue = self.pending_approvals.get(session_id, [])
+            if future in queue:
+                queue.remove(future)
+            if not queue:
+                self.pending_approvals.pop(session_id, None)
+
+        # Restore running status
+        if session.status == SessionStatus.AWAITING_APPROVAL:
+            session.status = SessionStatus.RUNNING
+            session.updated_at = datetime.now(timezone.utc)
+            self.persist_session(session_id)
+
+        return result
+
+    async def approve_tool_use(self, session_id: str) -> None:
+        queue = self.pending_approvals.get(session_id, [])
+        for future in queue:
+            if not future.done():
+                future.set_result({"approved": True})
+                return
+
+    async def deny_tool_use(self, session_id: str, reason: str | None = None) -> None:
+        queue = self.pending_approvals.get(session_id, [])
+        for future in queue:
+            if not future.done():
+                future.set_result(
+                    {"approved": False, "reason": reason or "Denied by user"}
+                )
+                return
 
     async def pause_session(self, session_id: str) -> None:
         proc = self.processes.get(session_id)
         session = self.sessions.get(session_id)
         if proc and proc.returncode is None:
-            proc.send_signal(signal.SIGINT)
+            proc.terminate()
             if session:
                 session.status = SessionStatus.PAUSED
                 session.updated_at = datetime.now(timezone.utc)
                 self.persist_session(session_id)
-
-    async def approve_tool_use(self, session_id: str) -> None:
-        event = self._approval_events.get(session_id)
-        if event:
-            self._approval_responses[session_id] = True
-            event.set()
-
-    async def deny_tool_use(self, session_id: str, reason: str | None = None) -> None:
-        event = self._approval_events.get(session_id)
-        if event:
-            self._approval_responses[session_id] = False
-            event.set()
 
     def subscribe(self, session_id: str, callback: Callable) -> None:
         self.ws_subscribers.setdefault(session_id, []).append(callback)
@@ -326,6 +500,23 @@ class SessionManager:
                     cb(msg)
             except Exception as e:
                 logger.error(f"WebSocket broadcast error: {e}")
+
+    def update_statusline(
+        self,
+        session_id: str,
+        model: str | None = None,
+        context_percent: int = 0,
+        git_branch: str | None = None,
+    ) -> None:
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+        if model:
+            session.current_model = model
+        session.context_percent = context_percent
+        if git_branch:
+            session.git_branch = git_branch
+        session.updated_at = datetime.now(timezone.utc)
 
     async def shutdown(self) -> None:
         for session_id in list(self.processes.keys()):

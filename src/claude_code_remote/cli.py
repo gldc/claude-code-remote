@@ -1,8 +1,11 @@
 """CLI entry point -- the `ccr` command."""
 
+import json
 import shutil
 import subprocess
 import sys
+from pathlib import Path
+
 import click
 
 from claude_code_remote import __version__
@@ -156,3 +159,144 @@ def doctor():
     if all_ok:
         click.echo()
         click.echo(click.style("All dependencies satisfied!", fg="green"))
+
+
+# --- Hook installation ---
+
+CLAUDE_SETTINGS_FILE = Path.home() / ".claude" / "settings.json"
+HOOK_DEST_DIR = Path.home() / ".claude" / "hooks" / "permission"
+HOOK_NAME = "ccr-approval.py"
+
+CCR_HOOK_ENTRY = {
+    "matcher": "",
+    "hooks": [
+        {
+            "type": "command",
+            "command": str(HOOK_DEST_DIR / HOOK_NAME),
+        }
+    ],
+}
+
+
+def _get_hook_source() -> Path:
+    """Get the path to the bundled hook script."""
+    return Path(__file__).parent / "hooks" / "ccr_approval.py"
+
+
+def _read_settings() -> dict:
+    if CLAUDE_SETTINGS_FILE.exists():
+        return json.loads(CLAUDE_SETTINGS_FILE.read_text())
+    return {}
+
+
+def _write_settings(settings: dict) -> None:
+    CLAUDE_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CLAUDE_SETTINGS_FILE.write_text(json.dumps(settings, indent=2) + "\n")
+
+
+def _hook_is_installed(settings: dict) -> bool:
+    """Check if CCR hook is already registered in settings."""
+    hook_path = str(HOOK_DEST_DIR / HOOK_NAME)
+    for entry in settings.get("hooks", {}).get("PreToolUse", []):
+        for h in entry.get("hooks", []):
+            if h.get("command", "") == hook_path:
+                return True
+    return False
+
+
+CONFLICTING_HOOKS = [
+    "telegram-approve.py",
+]
+
+
+@cli.command()
+def install():
+    """Install the CCR approval hook into Claude Code settings."""
+    # 1. Copy hook script
+    HOOK_DEST_DIR.mkdir(parents=True, exist_ok=True)
+    src = _get_hook_source()
+    dest = HOOK_DEST_DIR / HOOK_NAME
+    shutil.copy2(src, dest)
+    dest.chmod(0o755)
+    click.echo(click.style("  ✓ ", fg="green") + f"Hook script → {dest}")
+
+    # 2. Disable conflicting permission hooks
+    for hook_name in CONFLICTING_HOOKS:
+        hook_path = HOOK_DEST_DIR / hook_name
+        disabled_path = hook_path.with_suffix(hook_path.suffix + ".disabled")
+        if hook_path.exists():
+            hook_path.rename(disabled_path)
+            click.echo(
+                click.style("  ✓ ", fg="yellow")
+                + f"Disabled conflicting hook: {hook_name} → {disabled_path.name}"
+            )
+
+    # 3. Register in settings.json
+    settings = _read_settings()
+    if _hook_is_installed(settings):
+        click.echo(
+            click.style("  ✓ ", fg="green") + "Already registered in settings.json"
+        )
+    else:
+        hooks = settings.setdefault("hooks", {})
+        pre_tool = hooks.setdefault("PreToolUse", [])
+        pre_tool.append(CCR_HOOK_ENTRY)
+        _write_settings(settings)
+        click.echo(
+            click.style("  ✓ ", fg="green")
+            + "Registered PreToolUse hook in settings.json"
+        )
+
+    click.echo()
+    click.echo("Approval routing is ready.")
+    click.echo("  • Sessions with 'Skip Permissions' ON  → all tools auto-approved")
+    click.echo(
+        "  • Sessions with 'Skip Permissions' OFF → routed to your phone for approval"
+    )
+    click.echo("  • Non-CCR Claude sessions → hook is transparent (no effect)")
+
+
+@cli.command()
+def uninstall():
+    """Remove the CCR approval hook from Claude Code settings."""
+    # 1. Remove hook script
+    dest = HOOK_DEST_DIR / HOOK_NAME
+    if dest.exists():
+        dest.unlink()
+        click.echo(click.style("  ✓ ", fg="green") + f"Removed {dest}")
+    else:
+        click.echo(
+            click.style("  - ", fg="yellow") + "Hook script not found (already removed)"
+        )
+
+    # 2. Re-enable previously disabled hooks
+    for hook_name in CONFLICTING_HOOKS:
+        disabled_path = (HOOK_DEST_DIR / hook_name).with_suffix(
+            (HOOK_DEST_DIR / hook_name).suffix + ".disabled"
+        )
+        if disabled_path.exists():
+            disabled_path.rename(HOOK_DEST_DIR / hook_name)
+            click.echo(click.style("  ✓ ", fg="green") + f"Re-enabled {hook_name}")
+
+    # 3. Remove from settings.json
+    settings = _read_settings()
+    hook_path = str(HOOK_DEST_DIR / HOOK_NAME)
+    pre_tool = settings.get("hooks", {}).get("PreToolUse", [])
+    filtered = [
+        entry
+        for entry in pre_tool
+        if not any(h.get("command") == hook_path for h in entry.get("hooks", []))
+    ]
+    if len(filtered) != len(pre_tool):
+        settings["hooks"]["PreToolUse"] = filtered
+        if not filtered:
+            del settings["hooks"]["PreToolUse"]
+        if not settings["hooks"]:
+            del settings["hooks"]
+        _write_settings(settings)
+        click.echo(click.style("  ✓ ", fg="green") + "Removed from settings.json")
+    else:
+        click.echo(
+            click.style("  - ", fg="yellow")
+            + "Not found in settings.json (already removed)"
+        )

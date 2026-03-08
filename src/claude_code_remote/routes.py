@@ -34,14 +34,20 @@ def create_router(
 
     @router.get("/sessions")
     async def list_sessions(
-        status: SessionStatus | None = None, project_dir: str | None = None
+        status: SessionStatus | None = None,
+        project_dir: str | None = None,
+        archived: bool | None = None,
     ):
-        return session_mgr.list_sessions(status=status, project_dir=project_dir)
+        return session_mgr.list_sessions(
+            status=status, project_dir=project_dir, archived=archived
+        )
 
     @router.post("/sessions", status_code=201)
     async def create_session(req: SessionCreate):
         try:
             session = session_mgr.create_session(req)
+            if req.initial_prompt:
+                await session_mgr.send_prompt(session.id, req.initial_prompt)
             return session
         except RuntimeError as e:
             raise HTTPException(status_code=429, detail=str(e))
@@ -57,6 +63,16 @@ def create_router(
     async def delete_session(session_id: str):
         session_mgr.delete_session(session_id)
         return Response(status_code=204)
+
+    @router.post("/sessions/{session_id}/archive")
+    async def archive_session(session_id: str):
+        session_mgr.archive_session(session_id, archived=True)
+        return {"ok": True}
+
+    @router.post("/sessions/{session_id}/unarchive")
+    async def unarchive_session(session_id: str):
+        session_mgr.archive_session(session_id, archived=False)
+        return {"ok": True}
 
     @router.post("/sessions/{session_id}/send")
     async def send_prompt(session_id: str, body: dict):
@@ -91,6 +107,27 @@ def create_router(
         if not prompt:
             raise HTTPException(status_code=400, detail="prompt is required")
         await session_mgr.send_prompt(session_id, prompt)
+        return {"ok": True}
+
+    # --- Internal (called by hook scripts / statusline) ---
+
+    @router.post("/internal/approval-request")
+    async def internal_approval_request(body: dict):
+        session_id = body.get("session_id", "")
+        tool_name = body.get("tool_name", "")
+        tool_input = body.get("tool_input", {})
+        result = await session_mgr.request_approval(session_id, tool_name, tool_input)
+        return result
+
+    @router.post("/internal/statusline")
+    async def internal_statusline(body: dict):
+        session_id = body.get("session_id", "")
+        session_mgr.update_statusline(
+            session_id,
+            model=body.get("model"),
+            context_percent=body.get("context_percent", 0),
+            git_branch=body.get("git_branch"),
+        )
         return {"ok": True}
 
     # --- Templates ---

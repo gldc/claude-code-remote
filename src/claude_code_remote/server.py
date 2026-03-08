@@ -24,14 +24,18 @@ from claude_code_remote.websocket import create_ws_router
 logger = logging.getLogger(__name__)
 
 
-def create_app(skip_auth: bool = False) -> FastAPI:
+def create_app(
+    skip_auth: bool = False, host: str = "127.0.0.1", port: int = 8080
+) -> FastAPI:
     """Create and configure the FastAPI application."""
     ensure_dirs()
     config = load_config()
 
+    api_url = f"http://{host}:{port}"
     session_mgr = SessionManager(
         session_dir=SESSION_DIR,
         max_concurrent=config.get("max_concurrent_sessions", 5),
+        api_url=api_url,
     )
     session_mgr.load_sessions()
 
@@ -68,5 +72,6 @@ def run_server(host: str, port: int, skip_auth: bool = False) -> None:
     """Run the server with uvicorn."""
     import uvicorn
 
-    app = create_app(skip_auth=skip_auth)
+    app = create_app(skip_auth=skip_auth, host=host, port=port)
+    logging.basicConfig(level=logging.DEBUG)
     uvicorn.run(app, host=host, port=port, log_level="info")
