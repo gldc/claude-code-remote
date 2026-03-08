@@ -35,6 +35,7 @@ class SessionManager:
         # Queue of futures per session — supports multiple concurrent approvals
         self.pending_approvals: dict[str, list[asyncio.Future]] = {}
         self.session_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.session_dir, 0o700)
 
     def create_session(self, req: SessionCreate) -> Session:
         running = sum(
@@ -121,6 +122,7 @@ class SessionManager:
             return
         path = self.session_dir / f"{session_id}.json"
         path.write_text(session.model_dump_json(indent=2))
+        os.chmod(path, 0o600)
 
     def load_sessions(self) -> None:
         for path in self.session_dir.glob("*.json"):

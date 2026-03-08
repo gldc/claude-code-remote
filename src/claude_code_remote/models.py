@@ -8,7 +8,9 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pathlib import Path
+
+from pydantic import BaseModel, Field, field_validator
 
 
 # --- Enums ---
@@ -53,8 +55,20 @@ class SessionCreate(BaseModel):
     template_id: str | None = None
     model: str | None = None
     max_budget_usd: float | None = None
-    skip_permissions: bool = True
+    skip_permissions: bool = False
     use_sandbox: bool = False
+
+    @field_validator("project_dir")
+    @classmethod
+    def validate_project_dir(cls, v: str) -> str:
+        resolved = Path(v).expanduser().resolve()
+        if ".." in Path(v).parts:
+            raise ValueError("project_dir must not contain '..' components")
+        if not resolved.is_dir():
+            raise ValueError(
+                f"project_dir does not exist or is not a directory: {resolved}"
+            )
+        return str(resolved)
 
 
 class Session(BaseModel):
@@ -149,6 +163,18 @@ class WSMessage(BaseModel):
 class PushRegister(BaseModel):
     expo_push_token: str
 
+    @field_validator("expo_push_token")
+    @classmethod
+    def validate_expo_push_token(cls, v: str) -> str:
+        import re
+
+        if not re.match(r"^ExponentPushToken\[.+\]$", v):
+            raise ValueError(
+                "Invalid Expo push token format. "
+                "Expected format: ExponentPushToken[...]"
+            )
+        return v
+
 
 class PushSettings(BaseModel):
     notify_approvals: bool = True
@@ -169,3 +195,28 @@ class ApprovalRequest(BaseModel):
 class ApprovalResponse(BaseModel):
     approved: bool
     reason: str | None = None
+
+
+# --- Route request models ---
+
+
+class SendPromptRequest(BaseModel):
+    prompt: str = Field(..., max_length=100000)
+
+
+class ResumeSessionRequest(BaseModel):
+    prompt: str
+
+
+class InternalApprovalRequest(BaseModel):
+    session_id: str
+    tool_name: str
+    tool_input: dict[str, Any] = Field(default_factory=dict)
+    description: str = ""
+
+
+class StatuslineRequest(BaseModel):
+    session_id: str
+    model: str | None = None
+    context_percent: int = 0
+    git_branch: str | None = None

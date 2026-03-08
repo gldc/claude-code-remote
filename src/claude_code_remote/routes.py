@@ -15,6 +15,10 @@ from claude_code_remote.models import (
     PushSettings,
     SessionStatus,
     ApprovalResponse,
+    SendPromptRequest,
+    ResumeSessionRequest,
+    InternalApprovalRequest,
+    StatuslineRequest,
 )
 from claude_code_remote.session_manager import SessionManager
 from claude_code_remote.templates import TemplateStore
@@ -75,14 +79,11 @@ def create_router(
         return {"ok": True}
 
     @router.post("/sessions/{session_id}/send")
-    async def send_prompt(session_id: str, body: dict):
+    async def send_prompt(session_id: str, body: SendPromptRequest):
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        prompt = body.get("prompt", "")
-        if not prompt:
-            raise HTTPException(status_code=400, detail="prompt is required")
-        await session_mgr.send_prompt(session_id, prompt)
+        await session_mgr.send_prompt(session_id, body.prompt)
         return {"ok": True}
 
     @router.post("/sessions/{session_id}/approve")
@@ -102,31 +103,26 @@ def create_router(
         return {"ok": True}
 
     @router.post("/sessions/{session_id}/resume")
-    async def resume_session(session_id: str, body: dict):
-        prompt = body.get("prompt", "")
-        if not prompt:
-            raise HTTPException(status_code=400, detail="prompt is required")
-        await session_mgr.send_prompt(session_id, prompt)
+    async def resume_session(session_id: str, body: ResumeSessionRequest):
+        await session_mgr.send_prompt(session_id, body.prompt)
         return {"ok": True}
 
     # --- Internal (called by hook scripts / statusline) ---
 
     @router.post("/internal/approval-request")
-    async def internal_approval_request(body: dict):
-        session_id = body.get("session_id", "")
-        tool_name = body.get("tool_name", "")
-        tool_input = body.get("tool_input", {})
-        result = await session_mgr.request_approval(session_id, tool_name, tool_input)
+    async def internal_approval_request(body: InternalApprovalRequest):
+        result = await session_mgr.request_approval(
+            body.session_id, body.tool_name, body.tool_input
+        )
         return result
 
     @router.post("/internal/statusline")
-    async def internal_statusline(body: dict):
-        session_id = body.get("session_id", "")
+    async def internal_statusline(body: StatuslineRequest):
         session_mgr.update_statusline(
-            session_id,
-            model=body.get("model"),
-            context_percent=body.get("context_percent", 0),
-            git_branch=body.get("git_branch"),
+            body.session_id,
+            model=body.model,
+            context_percent=body.context_percent,
+            git_branch=body.git_branch,
         )
         return {"ok": True}
 

@@ -15,6 +15,7 @@ import urllib.error
 CCR_SESSION_ID = os.environ.get("CCR_SESSION_ID", "")
 CCR_API_URL = os.environ.get("CCR_API_URL", "")
 CCR_SKIP_APPROVAL = os.environ.get("CCR_SKIP_APPROVAL", "")
+CCR_APPROVAL_FAIL_MODE = os.environ.get("CCR_APPROVAL_FAIL_MODE", "deny")
 APPROVAL_TIMEOUT = int(os.environ.get("CCR_APPROVAL_TIMEOUT", "300"))
 
 # Tools that are safe to auto-approve (read-only, no side effects)
@@ -108,11 +109,12 @@ def main():
                 allow()
             else:
                 deny(result.get("reason", "Denied by user"))
-    except urllib.error.URLError:
-        # Server unreachable — fail open so Claude isn't stuck
-        allow()
-    except Exception as e:
-        allow()
+    except (urllib.error.URLError, Exception):
+        # Server unreachable — default to deny for safety
+        if CCR_APPROVAL_FAIL_MODE == "allow":
+            allow()
+        else:
+            deny("CCR server unreachable — tool denied for safety")
 
 
 if __name__ == "__main__":

@@ -21,13 +21,21 @@ def app_with_auth():
 
 def test_allows_request_when_whois_succeeds(app_with_auth):
     client = TestClient(app_with_auth)
-    with patch("claude_code_remote.auth.verify_tailscale_client", return_value=True):
+    with patch(
+        "claude_code_remote.auth.verify_tailscale_client",
+        new_callable=AsyncMock,
+        return_value=True,
+    ):
         resp = client.get("/test")
     assert resp.status_code == 200
 
 
 def test_rejects_request_when_whois_fails(app_with_auth):
     client = TestClient(app_with_auth)
-    with patch("claude_code_remote.auth.verify_tailscale_client", return_value=False):
+    with patch(
+        "claude_code_remote.auth.verify_tailscale_client",
+        new_callable=AsyncMock,
+        return_value=False,
+    ):
         resp = client.get("/test")
     assert resp.status_code == 403

@@ -6,6 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from claude_code_remote.auth import TailscaleAuthMiddleware
 from claude_code_remote.config import (
@@ -51,6 +52,16 @@ def create_app(
         await session_mgr.shutdown()
 
     app = FastAPI(title="Claude Code Remote", lifespan=lifespan)
+
+    # Restrictive CORS policy: no browser origins allowed by default.
+    # The mobile app communicates over HTTP directly (no CORS), so this
+    # only serves to block browser-based cross-origin attacks.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_headers=["*"],
+    )
 
     if not skip_auth:
         app.add_middleware(TailscaleAuthMiddleware)

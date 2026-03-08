@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from claude_code_remote.models import PushSettings
 logger = logging.getLogger(__name__)
 
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
+EXPO_TOKEN_RE = re.compile(r"^ExponentPushToken\[.+\]$")
 
 
 class PushManager:
@@ -44,7 +46,17 @@ class PushManager:
             )
         )
 
+    @staticmethod
+    def validate_token(token: str) -> None:
+        """Validate that the token matches Expo push token format."""
+        if not EXPO_TOKEN_RE.match(token):
+            raise ValueError(
+                f"Invalid Expo push token format: {token!r}. "
+                "Expected format: ExponentPushToken[...]"
+            )
+
     def register_token(self, token: str) -> None:
+        self.validate_token(token)
         self.tokens.add(token)
         self._save()
 
