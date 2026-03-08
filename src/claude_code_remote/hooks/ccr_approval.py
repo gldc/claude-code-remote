@@ -6,11 +6,13 @@ Only activates when CCR_SESSION_ID and CCR_API_URL env vars are set
 this hook does nothing and allows all tools.
 """
 
+import fnmatch
 import json
 import os
 import sys
 import urllib.request
 import urllib.error
+from pathlib import Path
 
 CCR_SESSION_ID = os.environ.get("CCR_SESSION_ID", "")
 CCR_API_URL = os.environ.get("CCR_API_URL", "")
@@ -29,6 +31,11 @@ SAFE_TOOLS = {
     "Task",
     "TaskOutput",
 }
+
+# Approval rules file
+RULES_FILE = (
+    Path.home() / ".local" / "state" / "claude-code-remote" / "approval_rules.json"
+)
 
 
 def allow():
@@ -58,6 +65,26 @@ def deny(reason="Denied"):
     sys.stdout.flush()
 
 
+def check_approval_rules(tool_name: str) -> str | None:
+    """Check approval rules file. Returns 'approve', 'deny', or None."""
+    try:
+        if not RULES_FILE.exists():
+            return None
+        rules = json.loads(RULES_FILE.read_text())
+        project_dir = os.environ.get("CCR_PROJECT_DIR", "")
+        for rule in rules:
+            pattern = rule.get("tool_pattern", "")
+            if not fnmatch.fnmatch(tool_name, pattern):
+                continue
+            rule_proj = rule.get("project_dir")
+            if rule_proj and project_dir and rule_proj != project_dir:
+                continue
+            return rule.get("action", "approve")
+    except Exception:
+        pass
+    return None
+
+
 def main():
     # Not a CCR session — allow everything (transparent passthrough)
     if not CCR_SESSION_ID or not CCR_API_URL:
@@ -78,6 +105,15 @@ def main():
 
     tool_name = hook_input.get("tool_name", "")
     tool_input = hook_input.get("tool_input", {})
+
+    # Check approval rules before anything else
+    rule_action = check_approval_rules(tool_name)
+    if rule_action == "approve":
+        allow()
+        return
+    elif rule_action == "deny":
+        deny(f"Denied by approval rule: {tool_name}")
+        return
 
     # Safe tools auto-approve without routing to mobile app
     if tool_name in SAFE_TOOLS:
