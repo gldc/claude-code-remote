@@ -12,6 +12,9 @@ SESSION_DIR = STATE_DIR / "sessions"
 TEMPLATE_DIR = STATE_DIR / "templates"
 PUSH_FILE = STATE_DIR / "push.json"
 PROJECTS_FILE = STATE_DIR / "projects.json"
+USAGE_HISTORY_FILE = STATE_DIR / "usage_history.jsonl"
+APPROVAL_RULES_FILE = STATE_DIR / "approval_rules.json"
+WORKFLOW_DIR = STATE_DIR / "workflows"
 
 DEFAULT_CONFIG = {
     "port": 8080,
@@ -22,7 +25,7 @@ DEFAULT_CONFIG = {
 
 
 def ensure_dirs() -> None:
-    for d in [LOG_DIR, PID_DIR, SESSION_DIR, TEMPLATE_DIR]:
+    for d in [LOG_DIR, PID_DIR, SESSION_DIR, TEMPLATE_DIR, WORKFLOW_DIR]:
         d.mkdir(parents=True, exist_ok=True)
 
 

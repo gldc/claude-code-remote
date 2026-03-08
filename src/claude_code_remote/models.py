@@ -43,6 +43,7 @@ class WSMessageType(str, Enum):
     ERROR = "error"
     RATE_LIMIT = "rate_limit"
     COST_UPDATE = "cost_update"
+    BASH_OUTPUT = "bash_output"
 
 
 # --- Session ---
@@ -57,6 +58,7 @@ class SessionCreate(BaseModel):
     max_budget_usd: float | None = None
     skip_permissions: bool = False
     use_sandbox: bool = False
+    allowed_tools: list[str] | None = None
 
     @field_validator("project_dir")
     @classmethod
@@ -88,9 +90,15 @@ class Session(BaseModel):
     claude_session_id: str | None = None
     current_model: str | None = None
     context_percent: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     git_branch: str | None = None
     skip_permissions: bool = True
     use_sandbox: bool = False
+    allowed_tools: list[str] | None = None
+    owner: str | None = None
+    collaborators: list[str] = Field(default_factory=list)
+    require_multi_approval: bool = False
 
 
 class SessionSummary(BaseModel):
@@ -121,11 +129,13 @@ class TemplateCreate(BaseModel):
     model: str | None = None
     max_budget_usd: float | None = None
     allowed_tools: list[str] | None = None
+    tags: list[str] = Field(default_factory=list)
 
 
 class Template(TemplateCreate):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    is_builtin: bool = False
 
 
 # --- Project ---
@@ -197,6 +207,14 @@ class ApprovalResponse(BaseModel):
     reason: str | None = None
 
 
+class ApprovalRule(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
+    tool_pattern: str  # exact name or glob pattern like "Bash*"
+    action: str = "approve"  # "approve" or "deny"
+    project_dir: str | None = None  # scope to project, or None for global
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 # --- Route request models ---
 
 
@@ -220,3 +238,117 @@ class StatuslineRequest(BaseModel):
     model: str | None = None
     context_percent: int = 0
     git_branch: str | None = None
+
+
+# --- Usage ---
+
+
+class UsageWindow(BaseModel):
+    percent_remaining: float = 0.0
+    resets_in_seconds: int = 0
+
+
+class UsageWindowWithReserve(UsageWindow):
+    reserve_percent: float = 0.0
+
+
+class ExtraUsage(BaseModel):
+    monthly_spend: float = 0.0
+    monthly_limit: float = 0.0
+
+
+class UsageData(BaseModel):
+    session: UsageWindow = Field(default_factory=UsageWindow)
+    weekly: UsageWindowWithReserve = Field(default_factory=UsageWindowWithReserve)
+    sonnet: UsageWindow = Field(default_factory=UsageWindow)
+    extra_usage: ExtraUsage = Field(default_factory=ExtraUsage)
+    plan_tier: str = "unknown"
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# --- Git ---
+
+
+class GitFileStatus(BaseModel):
+    path: str
+    status: str  # "M", "A", "D", "?", "R"
+
+
+class GitStatus(BaseModel):
+    branch: str = ""
+    modified: list[GitFileStatus] = Field(default_factory=list)
+    staged: list[GitFileStatus] = Field(default_factory=list)
+    untracked: list[str] = Field(default_factory=list)
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
+class GitBranch(BaseModel):
+    name: str
+    is_current: bool = False
+
+
+class GitLogEntry(BaseModel):
+    hash: str
+    message: str
+    author: str
+    date: str
+
+
+# --- MCP ---
+
+
+class MCPServer(BaseModel):
+    name: str
+    type: str = "stdio"  # "stdio" or "sse"
+    command: str | None = None  # for stdio
+    args: list[str] = Field(default_factory=list)
+    url: str | None = None  # for sse
+    env: dict[str, str] = Field(default_factory=dict)
+    scope: str = "global"  # "global" or "project"
+
+
+class MCPHealthResult(BaseModel):
+    name: str
+    healthy: bool
+    latency_ms: int | None = None
+    error: str | None = None
+
+
+# --- Workflow ---
+
+
+class WorkflowStepStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    ERROR = "error"
+
+
+class WorkflowStep(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:8])
+    session_config: SessionCreate
+    depends_on: list[str] = Field(default_factory=list)  # step IDs
+    status: WorkflowStepStatus = WorkflowStepStatus.PENDING
+    session_id: str | None = None  # created session ID
+
+
+class WorkflowStatus(str, Enum):
+    CREATED = "created"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    ERROR = "error"
+
+
+class Workflow(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
+    name: str
+    steps: list[WorkflowStep] = Field(default_factory=list)
+    status: WorkflowStatus = WorkflowStatus.CREATED
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# --- Collaboration ---
+
+
+class CollaboratorRequest(BaseModel):
+    identity: str

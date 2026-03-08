@@ -15,10 +15,16 @@ from claude_code_remote.config import (
     SESSION_DIR,
     TEMPLATE_DIR,
     PUSH_FILE,
+    USAGE_HISTORY_FILE,
+    APPROVAL_RULES_FILE,
+    WORKFLOW_DIR,
 )
 from claude_code_remote.session_manager import SessionManager
 from claude_code_remote.templates import TemplateStore
 from claude_code_remote.push import PushManager
+from claude_code_remote.usage import UsageClient
+from claude_code_remote.approval_rules import ApprovalRulesStore
+from claude_code_remote.workflows import WorkflowEngine
 from claude_code_remote.routes import create_router
 from claude_code_remote.websocket import create_ws_router
 
@@ -42,6 +48,9 @@ def create_app(
 
     template_store = TemplateStore(TEMPLATE_DIR)
     push_mgr = PushManager(PUSH_FILE)
+    usage_client = UsageClient(USAGE_HISTORY_FILE)
+    approval_store = ApprovalRulesStore(APPROVAL_RULES_FILE)
+    workflow_engine = WorkflowEngine(WORKFLOW_DIR)
     scan_dirs = config.get("scan_directories", ["~/Developer"])
 
     @asynccontextmanager
@@ -66,7 +75,15 @@ def create_app(
     if not skip_auth:
         app.add_middleware(TailscaleAuthMiddleware)
 
-    api_router = create_router(session_mgr, template_store, push_mgr, scan_dirs)
+    api_router = create_router(
+        session_mgr,
+        template_store,
+        push_mgr,
+        scan_dirs,
+        usage_client=usage_client,
+        approval_store=approval_store,
+        workflow_engine=workflow_engine,
+    )
     app.include_router(api_router, prefix="/api")
 
     ws_router = create_ws_router(session_mgr)
@@ -75,6 +92,9 @@ def create_app(
     # Stash references for CLI access
     app.state.session_mgr = session_mgr
     app.state.push_mgr = push_mgr
+    app.state.usage_client = usage_client
+    app.state.approval_store = approval_store
+    app.state.workflow_engine = workflow_engine
 
     return app
 
