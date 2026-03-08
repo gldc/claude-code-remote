@@ -56,6 +56,7 @@ class SessionManager:
             template_id=req.template_id,
             skip_permissions=req.skip_permissions,
             use_sandbox=req.use_sandbox,
+            allowed_tools=req.allowed_tools,
         )
         self.sessions[session.id] = session
         self.persist_session(session.id)
@@ -146,6 +147,48 @@ class SessionManager:
             except ProcessLookupError:
                 pass
 
+    # --- Search & Export ---
+
+    def search_sessions(self, query: str) -> list[dict]:
+        """Full-text search across session messages."""
+        query_lower = query.lower()
+        results = []
+        for sid, session in self.sessions.items():
+            for msg in session.messages:
+                text = ""
+                data = msg.get("data", {})
+                if msg.get("type") == "assistant_text":
+                    text = data.get("text", "")
+                elif msg.get("type") == "user_message":
+                    text = data.get("text", "")
+                elif msg.get("type") == "tool_result":
+                    text = str(data.get("output", ""))
+
+                if query_lower in text.lower():
+                    # Extract snippet around match
+                    idx = text.lower().index(query_lower)
+                    start = max(0, idx - 50)
+                    end = min(len(text), idx + len(query) + 50)
+                    snippet = text[start:end]
+                    results.append(
+                        {
+                            "session_id": sid,
+                            "session_name": session.name,
+                            "snippet": snippet,
+                            "message_type": msg.get("type"),
+                            "timestamp": msg.get("timestamp"),
+                        }
+                    )
+                    break  # One match per session is enough for listing
+        return results
+
+    def export_session(self, session_id: str) -> dict | None:
+        """Export full session data as dict."""
+        session = self.sessions.get(session_id)
+        if not session:
+            return None
+        return session.model_dump(mode="json")
+
     async def send_prompt(self, session_id: str, prompt: str) -> None:
         """Send a prompt by spawning a per-turn claude process.
 
@@ -174,6 +217,8 @@ class SessionManager:
 
         if session.skip_permissions:
             cmd.append("--dangerously-skip-permissions")
+        elif session.allowed_tools:
+            cmd.extend(["--allowedTools", ",".join(session.allowed_tools)])
         else:
             cmd.extend(
                 [
@@ -322,6 +367,12 @@ class SessionManager:
                                 (total_tokens / ctx_window) * 100
                             )
 
+                        # Capture cache token counts
+                        session.cache_read_tokens = usage.get("cacheReadInputTokens", 0)
+                        session.cache_write_tokens = usage.get(
+                            "cacheCreationInputTokens", 0
+                        )
+
                     session.updated_at = datetime.now(timezone.utc)
                     self.persist_session(session_id)
         except Exception as e:
@@ -388,6 +439,28 @@ class SessionManager:
             if not messages:
                 return None
             return messages if len(messages) > 1 else messages[0]
+
+        elif etype == "tool_result":
+            content = event.get("content", "")
+            tool_use_id = event.get("tool_use_id", "")
+            is_error = event.get("is_error", False)
+
+            # Detect content type
+            content_type = "text"
+            if isinstance(content, str) and (
+                content.startswith("diff --git") or content.startswith("---")
+            ):
+                content_type = "diff"
+
+            return WSMessage(
+                type=WSMessageType.TOOL_RESULT,
+                data={
+                    "tool_use_id": tool_use_id,
+                    "content": content,
+                    "content_type": content_type,
+                    "is_error": is_error,
+                },
+            )
 
         elif etype == "result":
             return WSMessage(
