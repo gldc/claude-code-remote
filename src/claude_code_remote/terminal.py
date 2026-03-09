@@ -14,9 +14,11 @@ import termios
 import time
 from dataclasses import dataclass, field
 
+from collections.abc import Callable
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from claude_code_remote.project_store import ProjectStore
+from claude_code_remote.models import Project
 
 logger = logging.getLogger(__name__)
 
@@ -237,13 +239,14 @@ class TerminalManager:
 
 
 def create_terminal_router(
-    terminal_mgr: TerminalManager, project_store: ProjectStore
+    terminal_mgr: TerminalManager,
+    resolve_project: Callable[[str], Project | None],
 ) -> APIRouter:
     router = APIRouter()
 
     @router.websocket("/ws/terminal/{project_id}")
     async def terminal_stream(websocket: WebSocket, project_id: str):
-        project = project_store.get(project_id)
+        project = resolve_project(project_id)
         if not project:
             await websocket.close(code=4004, reason="Project not found")
             return
