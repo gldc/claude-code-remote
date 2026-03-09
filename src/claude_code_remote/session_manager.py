@@ -62,6 +62,28 @@ class SessionManager:
         self.persist_session(session.id)
         return session
 
+    @staticmethod
+    def _to_summary(s: Session) -> SessionSummary:
+        preview = None
+        if s.messages:
+            last = s.messages[-1]
+            preview = str(last.get("data", {}).get("text", ""))[:100]
+        return SessionSummary(
+            id=s.id,
+            name=s.name,
+            project_dir=s.project_dir,
+            status=s.status,
+            model=s.model,
+            created_at=s.created_at,
+            updated_at=s.updated_at,
+            total_cost_usd=s.total_cost_usd,
+            current_model=s.current_model,
+            context_percent=s.context_percent,
+            git_branch=s.git_branch,
+            last_message_preview=preview,
+            archived=s.archived,
+        )
+
     def list_sessions(
         self,
         status: SessionStatus | None = None,
@@ -76,27 +98,7 @@ class SessionManager:
                 continue
             if archived is not None and s.archived != archived:
                 continue
-            preview = None
-            if s.messages:
-                last = s.messages[-1]
-                preview = str(last.get("data", {}).get("text", ""))[:100]
-            results.append(
-                SessionSummary(
-                    id=s.id,
-                    name=s.name,
-                    project_dir=s.project_dir,
-                    status=s.status,
-                    model=s.model,
-                    created_at=s.created_at,
-                    updated_at=s.updated_at,
-                    total_cost_usd=s.total_cost_usd,
-                    current_model=s.current_model,
-                    context_percent=s.context_percent,
-                    git_branch=s.git_branch,
-                    last_message_preview=preview,
-                    archived=s.archived,
-                )
-            )
+            results.append(self._to_summary(s))
         return results
 
     def archive_session(self, session_id: str, archived: bool = True) -> None:
@@ -109,6 +111,20 @@ class SessionManager:
 
     def get_session(self, session_id: str) -> Session | None:
         return self.sessions.get(session_id)
+
+    def rename_session(self, session_id: str, name: str) -> None:
+        session = self.sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+        session.name = name
+        session.updated_at = datetime.now(timezone.utc)
+        self.persist_session(session_id)
+
+    def get_summary(self, session_id: str) -> SessionSummary | None:
+        s = self.sessions.get(session_id)
+        if not s:
+            return None
+        return self._to_summary(s)
 
     def delete_session(self, session_id: str) -> None:
         self._stop_process(session_id)
@@ -135,7 +151,18 @@ class SessionManager:
                 ):
                     session.status = SessionStatus.ERROR
                     session.error_message = "Server restarted while session was active"
+                # Migrate tool_result messages: rename "content" → "output"
+                migrated = False
+                for msg in session.messages:
+                    if msg.get("type") == "tool_result" and "content" in msg.get(
+                        "data", {}
+                    ):
+                        data = msg["data"]
+                        data["output"] = data.pop("content")
+                        migrated = True
                 self.sessions[session.id] = session
+                if migrated:
+                    self.persist_session(session.id)
             except Exception as e:
                 logger.error(f"Failed to load session {path}: {e}")
 
@@ -198,6 +225,14 @@ class SessionManager:
         session = self.sessions.get(session_id)
         if not session:
             raise ValueError(f"Session {session_id} not found")
+
+        # Record the user message so it persists across reconnects
+        user_ws_msg = WSMessage(
+            type=WSMessageType.USER_MESSAGE,
+            data={"text": prompt},
+        )
+        session.messages.append(user_ws_msg.model_dump(mode="json"))
+        await self._broadcast(session_id, user_ws_msg)
 
         # Stop any existing process for this session
         self._stop_process(session_id)
@@ -456,7 +491,7 @@ class SessionManager:
                 type=WSMessageType.TOOL_RESULT,
                 data={
                     "tool_use_id": tool_use_id,
-                    "content": content,
+                    "output": content,
                     "content_type": content_type,
                     "is_error": is_error,
                 },
@@ -532,11 +567,26 @@ class SessionManager:
 
         return result
 
+    def _resolve_last_approval(self, session_id: str, approved: bool) -> None:
+        """Mark the last pending approval_request message as resolved."""
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+        for msg in reversed(session.messages):
+            if msg.get("type") == "approval_request" and not msg.get("data", {}).get(
+                "resolved"
+            ):
+                msg["data"]["resolved"] = True
+                msg["data"]["approved"] = approved
+                break
+        self.persist_session(session_id)
+
     async def approve_tool_use(self, session_id: str) -> None:
         queue = self.pending_approvals.get(session_id, [])
         for future in queue:
             if not future.done():
                 future.set_result({"approved": True})
+                self._resolve_last_approval(session_id, approved=True)
                 return
 
     async def deny_tool_use(self, session_id: str, reason: str | None = None) -> None:
@@ -546,6 +596,7 @@ class SessionManager:
                 future.set_result(
                     {"approved": False, "reason": reason or "Denied by user"}
                 )
+                self._resolve_last_approval(session_id, approved=False)
                 return
 
     async def pause_session(self, session_id: str) -> None:

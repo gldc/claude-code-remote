@@ -141,6 +141,34 @@ Config file: `~/.config/claude-code-remote/config.json`
 }
 ```
 
+## Recommended Server Setup
+
+### SSH Keys for Unattended Use
+
+If your SSH keys are managed by 1Password (or another agent that requires interactive approval), Claude Code sessions run via CCR will hang waiting for approval when git operations need SSH access. Set up a dedicated local key:
+
+```bash
+# Generate a passphrase-less key for unattended use
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_local -N "" -C "$(whoami)@ccr-local"
+
+# Add to GitHub (requires gh CLI authenticated)
+gh ssh-key add ~/.ssh/id_ed25519_local.pub --title "CCR local key"
+```
+
+Then add a `Host github.com` block in `~/.ssh/config` **above** the `Host *` catch-all:
+
+```
+Host github.com
+    IdentityFile ~/.ssh/id_ed25519_local
+    IdentityAgent none
+    IdentitiesOnly yes
+
+Host *
+    IdentityAgent "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
+```
+
+This ensures GitHub SSH uses the local key while everything else continues through 1Password.
+
 ## Development
 
 ```bash

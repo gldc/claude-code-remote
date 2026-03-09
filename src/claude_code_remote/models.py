@@ -36,6 +36,7 @@ class ProjectType(str, Enum):
 
 class WSMessageType(str, Enum):
     ASSISTANT_TEXT = "assistant_text"
+    USER_MESSAGE = "user_message"
     TOOL_USE = "tool_use"
     TOOL_RESULT = "tool_result"
     STATUS_CHANGE = "status_change"
@@ -47,6 +48,10 @@ class WSMessageType(str, Enum):
 
 
 # --- Session ---
+
+
+class SessionUpdate(BaseModel):
+    name: str | None = None
 
 
 class SessionCreate(BaseModel):
@@ -148,6 +153,8 @@ class Project(BaseModel):
     type: ProjectType = ProjectType.UNKNOWN
     session_count: int = 0
     last_session: datetime | None = None
+    status: str = "ready"
+    error_message: str | None = None
 
     @staticmethod
     def id_from_path(path: str) -> str:
@@ -156,6 +163,15 @@ class Project(BaseModel):
 
 class ProjectRegister(BaseModel):
     path: str
+
+
+class ProjectCreate(BaseModel):
+    name: str
+
+
+class ProjectClone(BaseModel):
+    url: str
+    name: str | None = None
 
 
 # --- WebSocket ---
@@ -337,6 +353,16 @@ class WorkflowStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     ERROR = "error"
+
+
+class WorkflowCreate(BaseModel):
+    name: str
+    steps: list[WorkflowStep] = Field(default_factory=list)
+
+
+class WorkflowStepCreate(BaseModel):
+    session_config: SessionCreate
+    depends_on: list[str] = Field(default_factory=list)
 
 
 class Workflow(BaseModel):

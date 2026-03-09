@@ -44,6 +44,14 @@ class WorkflowEngine:
         self._save(wf)
         return wf
 
+    def add_step(self, workflow_id: str, step: WorkflowStep) -> Workflow | None:
+        wf = self.workflows.get(workflow_id)
+        if not wf:
+            return None
+        wf.steps.append(step)
+        self._save(wf)
+        return wf
+
     def get(self, workflow_id: str) -> Workflow | None:
         return self.workflows.get(workflow_id)
 

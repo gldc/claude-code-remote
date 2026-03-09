@@ -15,6 +15,7 @@ from claude_code_remote.config import (
     SESSION_DIR,
     TEMPLATE_DIR,
     PUSH_FILE,
+    PROJECTS_FILE,
     USAGE_HISTORY_FILE,
     APPROVAL_RULES_FILE,
     WORKFLOW_DIR,
@@ -25,6 +26,7 @@ from claude_code_remote.push import PushManager
 from claude_code_remote.usage import UsageClient
 from claude_code_remote.approval_rules import ApprovalRulesStore
 from claude_code_remote.workflows import WorkflowEngine
+from claude_code_remote.project_store import ProjectStore
 from claude_code_remote.routes import create_router
 from claude_code_remote.websocket import create_ws_router
 
@@ -51,6 +53,7 @@ def create_app(
     usage_client = UsageClient(USAGE_HISTORY_FILE)
     approval_store = ApprovalRulesStore(APPROVAL_RULES_FILE)
     workflow_engine = WorkflowEngine(WORKFLOW_DIR)
+    project_store = ProjectStore(PROJECTS_FILE)
     scan_dirs = config.get("scan_directories", ["~/Developer"])
 
     @asynccontextmanager
@@ -68,7 +71,7 @@ def create_app(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[],
-        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["*"],
     )
 
@@ -83,6 +86,7 @@ def create_app(
         usage_client=usage_client,
         approval_store=approval_store,
         workflow_engine=workflow_engine,
+        project_store=project_store,
     )
     app.include_router(api_router, prefix="/api")
 

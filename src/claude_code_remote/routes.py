@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 import shutil
 import time
 from pathlib import Path
@@ -13,8 +15,12 @@ from starlette.responses import Response
 
 from claude_code_remote.models import (
     SessionCreate,
+    SessionUpdate,
     TemplateCreate,
+    Project,
     ProjectRegister,
+    ProjectCreate,
+    ProjectClone,
     PushRegister,
     PushSettings,
     SessionStatus,
@@ -26,11 +32,15 @@ from claude_code_remote.models import (
     MCPServer,
     CollaboratorRequest,
     WorkflowStep,
+    WorkflowCreate,
+    WorkflowStepCreate,
 )
 from claude_code_remote.session_manager import SessionManager
 from claude_code_remote.templates import TemplateStore
-from claude_code_remote.projects import scan_directory
+from claude_code_remote.project_store import ProjectStore
+from claude_code_remote.projects import scan_directory, detect_project_type
 from claude_code_remote.push import PushManager
+from claude_code_remote.git_check import check_git_setup
 from claude_code_remote.git import git_status, git_diff, git_branches, git_log
 from claude_code_remote.mcp import (
     list_mcp_servers,
@@ -46,19 +56,68 @@ _skills_cache: dict = {"data": None, "time": 0}
 SKILLS_CACHE_TTL = 300  # 5 minutes
 
 
-def _parse_skills_output(output: str) -> list[dict]:
-    """Parse skills output from Claude CLI."""
+def _parse_skill_frontmatter(path: Path) -> tuple[str, str]:
+    """Extract name and description from SKILL.md YAML frontmatter."""
+    name = ""
+    desc = ""
+    try:
+        text = path.read_text()
+        if not text.startswith("---"):
+            return name, desc
+        end = text.index("---", 3)
+        frontmatter = text[3:end]
+        for line in frontmatter.strip().split("\n"):
+            if line.startswith("name:"):
+                name = line[5:].strip().strip('"').strip("'")
+            elif line.startswith("description:"):
+                desc = line[12:].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return name, desc
+
+
+def _discover_skills() -> list[dict]:
+    """Discover skills from enabled Claude Code plugins."""
+    from .mcp import SETTINGS_PATH, INSTALLED_PLUGINS_PATH
+
     skills = []
-    for line in output.strip().split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        # Simple parsing: each line is a skill name, possibly with description
-        parts = line.split("\t", 1)
-        name = parts[0].strip()
-        desc = parts[1].strip() if len(parts) > 1 else ""
-        if name:
-            skills.append({"name": name, "description": desc})
+    try:
+        settings = (
+            json.loads(SETTINGS_PATH.read_text()) if SETTINGS_PATH.exists() else {}
+        )
+        enabled = settings.get("enabledPlugins", {})
+        installed = (
+            json.loads(INSTALLED_PLUGINS_PATH.read_text())
+            if INSTALLED_PLUGINS_PATH.exists()
+            else {}
+        )
+        plugins = installed.get("plugins", {})
+
+        for plugin_id in enabled:
+            entries = plugins.get(plugin_id, [])
+            if not entries:
+                continue
+            install_path = entries[0].get("installPath")
+            if not install_path:
+                continue
+            # plugin_id is like "superpowers@claude-plugins-official" — take the name part
+            plugin_name = plugin_id.split("@")[0]
+            skills_dir = Path(install_path) / "skills"
+            if not skills_dir.is_dir():
+                continue
+            for skill_dir in sorted(skills_dir.iterdir()):
+                skill_md = skill_dir / "SKILL.md"
+                if not skill_md.exists():
+                    continue
+                name, desc = _parse_skill_frontmatter(skill_md)
+                skills.append(
+                    {
+                        "name": f"{plugin_name}:{name or skill_dir.name}",
+                        "description": desc,
+                    }
+                )
+    except Exception as e:
+        logger.debug("Failed to discover skills: %s", e)
     return skills
 
 
@@ -70,6 +129,7 @@ def create_router(
     usage_client=None,
     approval_store=None,
     workflow_engine=None,
+    project_store: ProjectStore | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -121,6 +181,14 @@ def create_router(
     async def delete_session(session_id: str):
         session_mgr.delete_session(session_id)
         return Response(status_code=204)
+
+    @router.patch("/sessions/{session_id}")
+    async def update_session(session_id: str, body: SessionUpdate):
+        if not session_mgr.get_session(session_id):
+            raise HTTPException(404, "Session not found")
+        if body.name:
+            session_mgr.rename_session(session_id, body.name)
+        return session_mgr.get_summary(session_id)
 
     @router.post("/sessions/{session_id}/archive")
     async def archive_session(session_id: str):
@@ -264,6 +332,8 @@ def create_router(
         for d in scan_dirs:
             expanded = Path(d).expanduser()
             all_projects.extend(scan_directory(expanded))
+        if project_store:
+            return project_store.merge_with_scanned(all_projects)
         return all_projects
 
     @router.post("/projects")
@@ -273,6 +343,124 @@ def create_router(
             raise HTTPException(status_code=400, detail="Path is not a directory")
         scan_dirs.append(str(path.parent))
         return {"ok": True, "path": str(path)}
+
+    @router.post("/projects/create", status_code=201)
+    async def create_blank_project(body: ProjectCreate):
+        if not project_store:
+            raise HTTPException(503, "Project store not configured")
+        if not scan_dirs:
+            raise HTTPException(503, "No scan directories configured")
+        if not body.name.strip():
+            raise HTTPException(400, "Project name cannot be empty")
+
+        safe_name = re.sub(r"[^a-zA-Z0-9_-]", "-", body.name.strip())
+        if not safe_name:
+            raise HTTPException(400, "Invalid project name")
+
+        base_dir = Path(scan_dirs[0]).expanduser()
+        project_path = base_dir / safe_name
+        if project_path.exists():
+            raise HTTPException(409, f"Directory already exists: {safe_name}")
+
+        project_path.mkdir(parents=True)
+
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "init",
+            str(project_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            shutil.rmtree(project_path, ignore_errors=True)
+            raise HTTPException(500, f"git init failed: {stderr.decode().strip()}")
+
+        project = Project(
+            id=Project.id_from_path(str(project_path)),
+            name=safe_name,
+            path=str(project_path),
+            status="ready",
+        )
+        project_store.add(project)
+        return project
+
+    @router.post("/projects/clone", status_code=201)
+    async def clone_project(body: ProjectClone):
+        if not project_store:
+            raise HTTPException(503, "Project store not configured")
+        if not scan_dirs:
+            raise HTTPException(503, "No scan directories configured")
+
+        url = body.url.strip()
+        if not url:
+            raise HTTPException(400, "URL cannot be empty")
+
+        # Validate URL scheme to prevent local path cloning
+        if not re.match(r"^(https?://|ssh://|git://|git@)", url):
+            raise HTTPException(
+                400, "URL must use https://, http://, ssh://, git://, or git@ scheme"
+            )
+
+        if body.name:
+            safe_name = re.sub(r"[^a-zA-Z0-9_-]", "-", body.name.strip())
+        else:
+            match = re.search(r"/([^/]+?)(?:\.git)?/?$", url)
+            if not match:
+                raise HTTPException(
+                    400, "Cannot extract repo name from URL. Provide a name."
+                )
+            safe_name = re.sub(r"[^a-zA-Z0-9_-]", "-", match.group(1))
+
+        if not safe_name:
+            raise HTTPException(400, "Invalid project name")
+
+        base_dir = Path(scan_dirs[0]).expanduser()
+        project_path = base_dir / safe_name
+        if project_path.exists():
+            raise HTTPException(409, f"Directory already exists: {safe_name}")
+
+        project = Project(
+            id=Project.id_from_path(str(project_path)),
+            name=safe_name,
+            path=str(project_path),
+            status="cloning",
+        )
+        project_store.add(project)
+
+        async def _do_clone():
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "git",
+                    "clone",
+                    "--",
+                    url,
+                    str(project_path),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+                if proc.returncode == 0:
+                    project_store.update_status(project.id, "ready")
+                else:
+                    error_msg = stderr.decode().strip() or "Clone failed"
+                    shutil.rmtree(project_path, ignore_errors=True)
+                    project_store.update_status(project.id, "error", error_msg)
+            except asyncio.TimeoutError:
+                shutil.rmtree(project_path, ignore_errors=True)
+                project_store.update_status(
+                    project.id, "error", "Clone timed out (5 min)"
+                )
+            except Exception as e:
+                shutil.rmtree(project_path, ignore_errors=True)
+                project_store.update_status(project.id, "error", str(e))
+
+        asyncio.create_task(_do_clone())
+        return project
+
+    @router.get("/projects/git-check")
+    async def git_check():
+        return await check_git_setup()
 
     # --- System ---
 
@@ -358,8 +546,8 @@ def create_router(
     # --- MCP ---
 
     @router.get("/mcp/servers")
-    async def list_mcp():
-        return list_mcp_servers()
+    async def list_mcp(project_dir: str | None = None):
+        return list_mcp_servers(project_dir)
 
     @router.post("/mcp/servers", status_code=201)
     async def add_mcp(server: MCPServer):
@@ -387,30 +575,10 @@ def create_router(
         if _skills_cache["data"] and (now - _skills_cache["time"]) < SKILLS_CACHE_TTL:
             return _skills_cache["data"]
 
-        claude_bin = shutil.which("claude")
-        if not claude_bin:
-            return []
-
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                claude_bin,
-                "--print-skills",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
-            skills = _parse_skills_output(stdout.decode())
-            _skills_cache["data"] = skills
-            _skills_cache["time"] = now
-            return skills
-        except Exception as e:
-            logger.error("Failed to discover skills: %s", e)
-            # Fall back to known skills
-            return [
-                {"name": "commit", "description": "Create a git commit"},
-                {"name": "review-pr", "description": "Review a pull request"},
-                {"name": "compact", "description": "Compact conversation context"},
-            ]
+        skills = _discover_skills()
+        _skills_cache["data"] = skills
+        _skills_cache["time"] = now
+        return skills
 
     # --- Workflows ---
 
@@ -421,16 +589,28 @@ def create_router(
         return workflow_engine.list()
 
     @router.post("/workflows", status_code=201)
-    async def create_workflow(name: str, steps: list[WorkflowStep]):
+    async def create_workflow(body: WorkflowCreate):
         if not workflow_engine:
             raise HTTPException(503, "Workflow engine not configured")
-        return workflow_engine.create(name, steps)
+        return workflow_engine.create(body.name, body.steps)
 
     @router.get("/workflows/{workflow_id}")
     async def get_workflow(workflow_id: str):
         if not workflow_engine:
             raise HTTPException(503, "Workflow engine not configured")
         wf = workflow_engine.get(workflow_id)
+        if not wf:
+            raise HTTPException(404)
+        return wf
+
+    @router.post("/workflows/{workflow_id}/steps", status_code=201)
+    async def add_workflow_step(workflow_id: str, body: WorkflowStepCreate):
+        if not workflow_engine:
+            raise HTTPException(503, "Workflow engine not configured")
+        step = WorkflowStep(
+            session_config=body.session_config, depends_on=body.depends_on
+        )
+        wf = workflow_engine.add_step(workflow_id, step)
         if not wf:
             raise HTTPException(404)
         return wf

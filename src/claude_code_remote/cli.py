@@ -156,6 +156,34 @@ def doctor():
             click.echo(click.style("  ✗ ", fg="red") + f"{pkg} — pip install {pkg}")
             all_ok = False
 
+    # Git setup checks
+    click.echo()
+    click.echo("Git Setup")
+    from claude_code_remote.git_check import check_git_setup_sync
+
+    git_info = check_git_setup_sync()
+
+    if git_info["git"]:
+        click.echo(click.style("  ✓ ", fg="green") + f"git ({shutil.which('git')})")
+    else:
+        click.echo(click.style("  ✗ ", fg="red") + "git — install git")
+        all_ok = False
+
+    if git_info["ssh_key"]:
+        click.echo(click.style("  ✓ ", fg="green") + "SSH key found")
+    else:
+        click.echo(
+            click.style("  ✗ ", fg="yellow") + "No SSH key — private repos won't work"
+        )
+
+    if git_info["github_ssh"]:
+        click.echo(click.style("  ✓ ", fg="green") + "GitHub SSH access verified")
+    else:
+        click.echo(
+            click.style("  ✗ ", fg="yellow")
+            + "GitHub SSH — add key to GitHub for private repos"
+        )
+
     if all_ok:
         click.echo()
         click.echo(click.style("All dependencies satisfied!", fg="green"))
