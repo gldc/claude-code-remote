@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,8 +28,10 @@ from claude_code_remote.usage import UsageClient
 from claude_code_remote.approval_rules import ApprovalRulesStore
 from claude_code_remote.workflows import WorkflowEngine
 from claude_code_remote.project_store import ProjectStore
+from claude_code_remote.projects import scan_directory
 from claude_code_remote.routes import create_router
 from claude_code_remote.websocket import create_ws_router
+from claude_code_remote.terminal import TerminalManager, create_terminal_router
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,7 @@ def create_app(
     approval_store = ApprovalRulesStore(APPROVAL_RULES_FILE)
     workflow_engine = WorkflowEngine(WORKFLOW_DIR)
     project_store = ProjectStore(PROJECTS_FILE)
+    terminal_mgr = TerminalManager()
     scan_dirs = config.get("scan_directories", ["~/Developer"])
 
     @asynccontextmanager
@@ -61,6 +65,7 @@ def create_app(
         logger.info("Server starting up")
         yield
         logger.info("Server shutting down")
+        await terminal_mgr.shutdown()
         await session_mgr.shutdown()
 
     app = FastAPI(title="Claude Code Remote", lifespan=lifespan)
@@ -92,6 +97,20 @@ def create_app(
 
     ws_router = create_ws_router(session_mgr)
     app.include_router(ws_router)
+
+    def resolve_project(project_id: str):
+        """Resolve project_id to Project from store or scanned directories."""
+        stored = project_store.get(project_id)
+        if stored:
+            return stored
+        for d in scan_dirs:
+            for project in scan_directory(Path(d).expanduser()):
+                if project.id == project_id:
+                    return project
+        return None
+
+    terminal_router = create_terminal_router(terminal_mgr, resolve_project)
+    app.include_router(terminal_router)
 
     # Stash references for CLI access
     app.state.session_mgr = session_mgr
