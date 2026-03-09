@@ -4,14 +4,23 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-code-remote"
-version = "0.1.0"
+version = "0.2.0"
 description = "Remote access to Claude Code CLI over Tailscale"
 requires-python = ">=3.10"
 dependencies = [
     "click",
     "fastapi",
-    "uvicorn",
-    "rumps",
+    "uvicorn[standard]",
+    "httpx",
+    "pydantic>=2.0",
+    "websockets",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-httpx",
 ]
 
 [project.scripts]

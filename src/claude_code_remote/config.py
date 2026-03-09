@@ -8,15 +8,25 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 STATE_DIR = Path.home() / ".local" / "state" / "claude-code-remote"
 LOG_DIR = STATE_DIR / "logs"
 PID_DIR = STATE_DIR / "pids"
+SESSION_DIR = STATE_DIR / "sessions"
+TEMPLATE_DIR = STATE_DIR / "templates"
+PUSH_FILE = STATE_DIR / "push.json"
+PROJECTS_FILE = STATE_DIR / "projects.json"
+USAGE_HISTORY_FILE = STATE_DIR / "usage_history.jsonl"
+APPROVAL_RULES_FILE = STATE_DIR / "approval_rules.json"
+WORKFLOW_DIR = STATE_DIR / "workflows"
 
 DEFAULT_CONFIG = {
-    "auto_start_services": False,
+    "port": 8080,
+    "max_concurrent_sessions": 5,
+    "scan_directories": ["~/Developer"],
+    "session_idle_timeout_minutes": None,
 }
 
 
 def ensure_dirs() -> None:
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    PID_DIR.mkdir(parents=True, exist_ok=True)
+    for d in [LOG_DIR, PID_DIR, SESSION_DIR, TEMPLATE_DIR, WORKFLOW_DIR]:
+        d.mkdir(parents=True, exist_ok=True)
 
 
 def load_config() -> dict:

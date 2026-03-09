@@ -2,3 +2,6 @@
 logs/
 .DS_Store
 threads-posts.md
+__pycache__/
+*.pyc
+*.egg-info/
