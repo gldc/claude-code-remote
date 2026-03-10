@@ -98,8 +98,9 @@ async def test_notify_approval_rich_body_bash(push_mgr):
         )
         mock_send.assert_called_once()
         args = mock_send.call_args
-        assert "Bash" in args[0][1]  # body
-        assert "rm -rf node_modules" in args[0][1]
+        body = args[0][1]
+        assert "Bash: rm" in body  # only base command name, no arguments
+        assert "node_modules" not in body  # arguments must not leak
         assert args[1]["category"] == "approval_request"
         assert args[1]["thread_id"] == "sess123"
 
@@ -115,7 +116,9 @@ async def test_notify_approval_rich_body_edit(push_mgr):
             "sess123",
         )
         args = mock_send.call_args
-        assert "/src/main.py" in args[0][1]
+        body = args[0][1]
+        assert "main.py" in body  # only filename, not full path
+        assert "/src/" not in body  # full path must not leak
 
 
 @pytest.mark.asyncio
@@ -130,6 +133,8 @@ async def test_notify_approval_rich_body_truncates(push_mgr):
         )
         args = mock_send.call_args
         body = args[0][1]
+        # Only the base command name is shown, so body is always short
+        assert "Bash:" in body
         assert len(body) <= 350  # reasonable max
 
 
@@ -166,15 +171,16 @@ async def test_notify_approval_empty_tool_input(push_mgr):
 
 def test_summarize_tool_input_read(push_mgr):
     result = push_mgr._summarize_tool_input("Read", {"file_path": "/foo/bar.py"})
-    assert "Read: /foo/bar.py" in result
+    assert "Read: bar.py" in result  # only filename, not full path
+    assert "/foo/" not in result
 
 
 def test_summarize_tool_input_generic(push_mgr):
     result = push_mgr._summarize_tool_input("SomeCustomTool", {"arg1": "val1"})
-    # Should use JSON fallback
-    assert "SomeCustomTool:" in result
-    assert "arg1" in result
-    assert "val1" in result
+    # Fallback shows only tool name, no raw input
+    assert result == "SomeCustomTool"
+    assert "arg1" not in result
+    assert "val1" not in result
 
 
 def test_get_pending_tool_name_no_messages(tmp_path):

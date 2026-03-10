@@ -9,4 +9,6 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--no-auth", action="store_true")
     args = parser.parse_args()
-    run_server(host=args.host, port=args.port, skip_auth=args.no_auth)
+    # Force localhost when auth is disabled, regardless of --host value
+    host = "127.0.0.1" if args.no_auth else args.host
+    run_server(host=host, port=args.port, skip_auth=args.no_auth)

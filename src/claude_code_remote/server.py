@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -128,5 +129,5 @@ def run_server(host: str, port: int, skip_auth: bool = False) -> None:
     import uvicorn
 
     app = create_app(skip_auth=skip_auth, host=host, port=port)
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO")))
     uvicorn.run(app, host=host, port=port, log_level="info")
