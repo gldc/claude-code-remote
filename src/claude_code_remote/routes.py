@@ -142,7 +142,7 @@ def create_router(
     def _check_session_access(session_id: str, request: Request) -> None:
         """Raise 403 if the caller is not the session owner or a collaborator.
 
-        Read-only access (GET) is not gated — only mutating operations are.
+        Called for both read and mutating operations on session resources.
         When auth is disabled (no identity on request), access is allowed.
         """
         identity = _get_caller_identity(request)
@@ -160,6 +160,25 @@ def create_router(
                     status_code=403,
                     detail="You do not have access to this session.",
                 )
+
+    def _check_session_owner(session_id: str, request: Request) -> None:
+        """Raise 403 if the caller is not the session owner.
+
+        Stricter than _check_session_access — collaborators are NOT allowed.
+        Used for privileged operations like managing collaborators.
+        When auth is disabled (no identity on request), access is allowed.
+        """
+        identity = _get_caller_identity(request)
+        if identity is None:
+            return
+        session = session_mgr.get_session(session_id)
+        if session is None:
+            return  # Will 404 later
+        if session.owner and session.owner != identity:
+            raise HTTPException(
+                status_code=403,
+                detail="Only the session owner can perform this action.",
+            )
 
     # --- Sessions ---
 
@@ -214,7 +233,8 @@ def create_router(
         return session
 
     @router.get("/sessions/{session_id}/export")
-    async def export_session(session_id: str):
+    async def export_session(session_id: str, request: Request):
+        _check_session_access(session_id, request)
         data = session_mgr.export_session(session_id)
         if not data:
             raise HTTPException(404)
@@ -288,28 +308,32 @@ def create_router(
     # --- Session Git ---
 
     @router.get("/sessions/{session_id}/git/status")
-    async def get_git_status(session_id: str):
+    async def get_git_status(session_id: str, request: Request):
+        _check_session_access(session_id, request)
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404)
         return await git_status(session.project_dir)
 
     @router.get("/sessions/{session_id}/git/diff")
-    async def get_git_diff(session_id: str, file: str | None = None):
+    async def get_git_diff(session_id: str, request: Request, file: str | None = None):
+        _check_session_access(session_id, request)
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404)
         return {"diff": await git_diff(session.project_dir, file)}
 
     @router.get("/sessions/{session_id}/git/branches")
-    async def get_git_branches(session_id: str):
+    async def get_git_branches(session_id: str, request: Request):
+        _check_session_access(session_id, request)
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404)
         return await git_branches(session.project_dir)
 
     @router.get("/sessions/{session_id}/git/log")
-    async def get_git_log(session_id: str, n: int = 10):
+    async def get_git_log(session_id: str, request: Request, n: int = 10):
+        _check_session_access(session_id, request)
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404)
@@ -318,7 +342,10 @@ def create_router(
     # --- Session Collaboration ---
 
     @router.post("/sessions/{session_id}/collaborators")
-    async def add_collaborator(session_id: str, body: CollaboratorRequest):
+    async def add_collaborator(
+        session_id: str, body: CollaboratorRequest, request: Request
+    ):
+        _check_session_owner(session_id, request)
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(404)
@@ -328,7 +355,8 @@ def create_router(
         return {"collaborators": session.collaborators}
 
     @router.delete("/sessions/{session_id}/collaborators/{identity}")
-    async def remove_collaborator(session_id: str, identity: str):
+    async def remove_collaborator(session_id: str, identity: str, request: Request):
+        _check_session_owner(session_id, request)
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(404)

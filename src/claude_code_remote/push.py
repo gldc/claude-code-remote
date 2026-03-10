@@ -190,13 +190,30 @@ class PushManager:
                 thread_id=session_id,
             )
 
+    @staticmethod
+    def _sanitize_error(error: str) -> str:
+        """Strip file paths and stack traces from error strings.
+
+        Returns a safe summary suitable for push notifications.
+        """
+        # Strip absolute file paths (e.g. /home/user/project/file.py)
+        sanitized = re.sub(r"/[^\s:,\"']+", "<path>", error)
+        # Strip anything that looks like a stack trace line
+        sanitized = re.sub(r"(File\s+[\"'].*?[\"'],\s+line\s+\d+.*)", "", sanitized)
+        # Collapse whitespace
+        sanitized = re.sub(r"\s+", " ", sanitized).strip()
+        if not sanitized:
+            return "Session error"
+        return sanitized[:100]
+
     async def notify_error(
         self, session_name: str, error: str, session_id: str
     ) -> None:
         if self.settings.notify_errors:
+            safe_error = self._sanitize_error(error)
             await self.send(
                 "Session Error",
-                f"Session '{session_name}': {error[:100]}",
+                f"Session '{session_name}': {safe_error}",
                 {"session_id": session_id, "type": "session_error"},
                 thread_id=session_id,
             )
