@@ -574,7 +574,9 @@ class SessionManager:
         # Send push notification for approval request
         if self.push_mgr:
             try:
-                await self.push_mgr.notify_approval(session.name, tool_name, session.id)
+                await self.push_mgr.notify_approval(
+                    session.name, tool_name, tool_input, session.id
+                )
             except Exception as e:
                 logger.error(f"[session {session_id}] Push notification error: {e}")
 
@@ -616,12 +618,33 @@ class SessionManager:
                 break
         self.persist_session(session_id)
 
+    def _get_pending_tool_name(self, session_id: str) -> str:
+        """Extract tool_name from the last unresolved approval_request message."""
+        session = self.sessions.get(session_id)
+        if not session:
+            return "Unknown"
+        for msg in reversed(session.messages):
+            if msg.get("type") == "approval_request":
+                return msg.get("data", {}).get("tool_name", "Unknown")
+        return "Unknown"
+
     async def approve_tool_use(self, session_id: str) -> None:
         queue = self.pending_approvals.get(session_id, [])
         for future in queue:
             if not future.done():
                 future.set_result({"approved": True})
                 self._resolve_last_approval(session_id, approved=True)
+                if self.push_mgr:
+                    session = self.sessions.get(session_id)
+                    tool_name = self._get_pending_tool_name(session_id)
+                    try:
+                        await self.push_mgr.notify_action_confirmed(
+                            session.name, tool_name, True, session.id
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"[session {session_id}] Push confirmation error: {e}"
+                        )
                 return
 
     async def deny_tool_use(self, session_id: str, reason: str | None = None) -> None:
@@ -632,6 +655,17 @@ class SessionManager:
                     {"approved": False, "reason": reason or "Denied by user"}
                 )
                 self._resolve_last_approval(session_id, approved=False)
+                if self.push_mgr:
+                    session = self.sessions.get(session_id)
+                    tool_name = self._get_pending_tool_name(session_id)
+                    try:
+                        await self.push_mgr.notify_action_confirmed(
+                            session.name, tool_name, False, session.id
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"[session {session_id}] Push confirmation error: {e}"
+                        )
                 return
 
     async def pause_session(self, session_id: str) -> None:

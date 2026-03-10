@@ -1,6 +1,7 @@
 # tests/test_routes.py
+import asyncio
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -9,7 +10,12 @@ from claude_code_remote.session_manager import SessionManager
 from claude_code_remote.templates import TemplateStore, BUILTIN_TEMPLATES
 from claude_code_remote.projects import scan_directory
 from claude_code_remote.push import PushManager
-from claude_code_remote.models import SessionCreate, TemplateCreate
+from claude_code_remote.models import (
+    SessionCreate,
+    Session,
+    SessionStatus,
+    TemplateCreate,
+)
 
 
 @pytest.fixture
@@ -22,6 +28,9 @@ def app(tmp_path):
     router = create_router(session_mgr, template_store, push_mgr, scan_dirs)
     app = FastAPI()
     app.include_router(router, prefix="/api")
+    # Expose managers for integration tests
+    app.state.session_mgr = session_mgr
+    app.state.push_mgr = push_mgr
     return app
 
 
@@ -181,3 +190,67 @@ def test_workflows_endpoint(client):
     resp = client.get("/api/workflows")
     # Returns 503 when workflow_engine not configured
     assert resp.status_code == 503
+
+
+def _create_session_with_pending_approval(app):
+    """Helper: create a session in awaiting_approval state with a pending future."""
+    session_mgr = app.state.session_mgr
+    session = Session(
+        name="test-approval",
+        project_dir="/tmp",
+        status=SessionStatus.AWAITING_APPROVAL,
+        messages=[
+            {
+                "type": "approval_request",
+                "data": {
+                    "tool_name": "Bash",
+                    "tool_input": {"command": "echo hello"},
+                    "resolved": False,
+                },
+            }
+        ],
+    )
+    session_mgr.sessions[session.id] = session
+    loop = asyncio.new_event_loop()
+    future = loop.create_future()
+    session_mgr.pending_approvals[session.id] = [future]
+    return session, future, loop
+
+
+def test_approve_tool_sends_confirmation_push(app):
+    session, future, loop = _create_session_with_pending_approval(app)
+    session_mgr = app.state.session_mgr
+    push_mgr = app.state.push_mgr
+
+    with patch.object(
+        push_mgr, "notify_action_confirmed", new_callable=AsyncMock
+    ) as mock_confirm:
+        session_mgr.push_mgr = push_mgr
+        client = TestClient(app)
+        resp = client.post(f"/api/sessions/{session.id}/approve")
+        assert resp.status_code == 200
+        assert future.done()
+        assert future.result() == {"approved": True}
+
+    loop.close()
+
+
+def test_deny_tool_sends_confirmation_push(app):
+    session, future, loop = _create_session_with_pending_approval(app)
+    session_mgr = app.state.session_mgr
+    push_mgr = app.state.push_mgr
+
+    with patch.object(
+        push_mgr, "notify_action_confirmed", new_callable=AsyncMock
+    ) as mock_confirm:
+        session_mgr.push_mgr = push_mgr
+        client = TestClient(app)
+        resp = client.post(
+            f"/api/sessions/{session.id}/deny",
+            json={"approved": False, "reason": "not safe"},
+        )
+        assert resp.status_code == 200
+        assert future.done()
+        assert future.result() == {"approved": False, "reason": "not safe"}
+
+    loop.close()
