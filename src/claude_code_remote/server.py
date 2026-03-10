@@ -129,5 +129,12 @@ def run_server(host: str, port: int, skip_auth: bool = False) -> None:
     import uvicorn
 
     app = create_app(skip_auth=skip_auth, host=host, port=port)
-    logging.basicConfig(level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO")))
+    _VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+    _log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+    _log_level = (
+        getattr(logging, _log_level_name)
+        if _log_level_name in _VALID_LOG_LEVELS
+        else logging.INFO
+    )
+    logging.basicConfig(level=_log_level)
     uvicorn.run(app, host=host, port=port, log_level="info")
