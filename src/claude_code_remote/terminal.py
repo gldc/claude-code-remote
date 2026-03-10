@@ -242,6 +242,7 @@ class TerminalManager:
 def create_terminal_router(
     terminal_mgr: TerminalManager,
     resolve_project: Callable[[str], Project | None],
+    skip_auth: bool = False,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -250,11 +251,12 @@ def create_terminal_router(
         # Auth check: verify caller is on the Tailnet.
         # BaseHTTPMiddleware does NOT cover WebSocket connections,
         # so we perform the identity lookup directly.
-        client_ip = websocket.client.host if websocket.client else None
-        identity = await identify_tailscale_client(client_ip) if client_ip else None
-        if not identity:
-            await websocket.close(code=4003, reason="Not authorized")
-            return
+        if not skip_auth:
+            client_ip = websocket.client.host if websocket.client else None
+            identity = await identify_tailscale_client(client_ip) if client_ip else None
+            if not identity:
+                await websocket.close(code=4003, reason="Not authorized")
+                return
 
         project = resolve_project(project_id)
         if not project:

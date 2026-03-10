@@ -111,7 +111,9 @@ def create_app(
                     return project
         return None
 
-    terminal_router = create_terminal_router(terminal_mgr, resolve_project)
+    terminal_router = create_terminal_router(
+        terminal_mgr, resolve_project, skip_auth=skip_auth
+    )
     app.include_router(terminal_router)
 
     # Stash references for CLI access
