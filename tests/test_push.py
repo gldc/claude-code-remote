@@ -5,6 +5,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from claude_code_remote.push import PushManager
+from claude_code_remote.session_manager import SessionManager
+from claude_code_remote.models import Session, SessionStatus
 
 
 @pytest.fixture
@@ -150,3 +152,38 @@ async def test_notify_action_confirmed_deny(push_mgr):
         await push_mgr.notify_action_confirmed("my-session", "Bash", False, "sess123")
         args = mock_send.call_args
         assert args[0][0] == "Denied"
+
+
+@pytest.mark.asyncio
+async def test_notify_approval_empty_tool_input(push_mgr):
+    push_mgr.register_token("ExponentPushToken[abc123]")
+    with patch.object(push_mgr, "send", new_callable=AsyncMock) as mock_send:
+        await push_mgr.notify_approval("my-session", "Bash", {}, "sess123")
+        mock_send.assert_called_once()
+        body = mock_send.call_args[0][1]
+        assert "Bash" in body
+
+
+def test_summarize_tool_input_read(push_mgr):
+    result = push_mgr._summarize_tool_input("Read", {"file_path": "/foo/bar.py"})
+    assert "Read: /foo/bar.py" in result
+
+
+def test_summarize_tool_input_generic(push_mgr):
+    result = push_mgr._summarize_tool_input("SomeCustomTool", {"arg1": "val1"})
+    # Should use JSON fallback
+    assert "SomeCustomTool:" in result
+    assert "arg1" in result
+    assert "val1" in result
+
+
+def test_get_pending_tool_name_no_messages(tmp_path):
+    mgr = SessionManager(session_dir=tmp_path / "sessions")
+    session = Session(
+        name="test",
+        project_dir="/tmp",
+        status=SessionStatus.AWAITING_APPROVAL,
+        messages=[],
+    )
+    mgr.sessions[session.id] = session
+    assert mgr._get_pending_tool_name(session.id) == "Unknown"
