@@ -100,15 +100,52 @@ class PushManager:
         except Exception as e:
             logger.error(f"Failed to send push notification: {e}")
 
+    def _summarize_tool_input(self, tool_name: str, tool_input: dict) -> str:
+        """Build a one-line summary of tool input for notification body."""
+        max_len = 200
+        if tool_name == "Bash" and "command" in tool_input:
+            cmd = tool_input["command"]
+            return f"Bash: {cmd[:max_len]}{'...' if len(cmd) > max_len else ''}"
+        if tool_name in ("Edit", "Write") and "file_path" in tool_input:
+            return f"{tool_name}: {tool_input['file_path']}"
+        if tool_name == "Read" and "file_path" in tool_input:
+            return f"Read: {tool_input['file_path']}"
+        # Generic fallback
+        summary = json.dumps(tool_input, default=str)
+        return (
+            f"{tool_name}: {summary[:max_len]}{'...' if len(summary) > max_len else ''}"
+        )
+
     async def notify_approval(
-        self, session_name: str, tool_name: str, session_id: str
+        self, session_name: str, tool_name: str, tool_input: dict, session_id: str
     ) -> None:
         if self.settings.notify_approvals:
+            summary = self._summarize_tool_input(tool_name, tool_input)
+            body = f"Session '{session_name}' wants to run:\n{summary}"
             await self.send(
                 "Approval Needed",
-                f"Session '{session_name}' wants to: {tool_name}",
-                {"session_id": session_id, "type": "approval_request"},
+                body,
+                {
+                    "session_id": session_id,
+                    "type": "approval_request",
+                    "tool_name": tool_name,
+                },
+                category="approval_request",
+                thread_id=session_id,
             )
+
+    async def notify_action_confirmed(
+        self, session_name: str, tool_name: str, approved: bool, session_id: str
+    ) -> None:
+        title = "Approved" if approved else "Denied"
+        body = f"{tool_name} in '{session_name}'"
+        await self.send(
+            title,
+            body,
+            {"session_id": session_id, "type": "action_confirmed"},
+            thread_id=session_id,
+            sound=None,
+        )
 
     async def notify_completion(
         self, session_name: str, cost: float, session_id: str
