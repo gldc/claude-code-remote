@@ -23,7 +23,8 @@ def cli():
 @cli.command()
 @click.option("-d", "--daemon", is_flag=True, help="Run in background.")
 @click.option("--no-auth", is_flag=True, help="Disable Tailscale auth (for local dev).")
-def start(daemon, no_auth):
+@click.option("--menubar", is_flag=True, help="Show status in macOS menubar.")
+def start(daemon, no_auth, menubar):
     """Start the API server."""
     from claude_code_remote import tailscale
     from claude_code_remote.config import load_config, PID_DIR, LOG_DIR, ensure_dirs
@@ -80,10 +81,55 @@ def start(daemon, no_auth):
             (PID_DIR / "caffeinate.pid").write_text(str(caf.pid))
         except FileNotFoundError:
             pass
+
+        if menubar:
+            menubar_proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "claude_code_remote.menubar",
+                    "--host",
+                    host,
+                    "--port",
+                    str(port),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            (PID_DIR / "menubar.pid").write_text(str(menubar_proc.pid))
+            click.echo(f"Menubar running (PID {menubar_proc.pid})")
     else:
+        menubar_proc = None
+        if menubar:
+            menubar_proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "claude_code_remote.menubar",
+                    "--host",
+                    host,
+                    "--port",
+                    str(port),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            (PID_DIR / "menubar.pid").write_text(str(menubar_proc.pid))
+            click.echo(f"Menubar running (PID {menubar_proc.pid})")
+
         from claude_code_remote.server import run_server
 
-        run_server(host=host, port=port, skip_auth=no_auth)
+        try:
+            run_server(host=host, port=port, skip_auth=no_auth)
+        finally:
+            if menubar_proc:
+                menubar_proc.terminate()
+                try:
+                    menubar_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    menubar_proc.kill()
+                (PID_DIR / "menubar.pid").unlink(missing_ok=True)
 
 
 @cli.command()
@@ -93,18 +139,19 @@ def stop():
     import signal
     import os
 
-    for name in ["server", "caffeinate"]:
+    for name in ["server", "menubar", "caffeinate"]:
         pid_file = PID_DIR / f"{name}.pid"
         if pid_file.exists():
             try:
                 pid = int(pid_file.read_text().strip())
                 os.kill(pid, signal.SIGTERM)
                 click.echo(f"Stopped {name} (PID {pid})")
-            except (ProcessLookupError, ValueError):
+            except (ProcessLookupError, PermissionError, ValueError):
                 click.echo(f"{name} was not running")
             pid_file.unlink(missing_ok=True)
         else:
-            click.echo(f"{name} is not running")
+            if name == "server":
+                click.echo(f"{name} is not running")
 
 
 @cli.command()
@@ -136,6 +183,15 @@ def status():
             click.echo(click.style("  ○ ", fg="red") + "server (stale PID)")
     else:
         click.echo(click.style("  ○ ", fg="red") + "server")
+
+    menubar_pid_file = PID_DIR / "menubar.pid"
+    if menubar_pid_file.exists():
+        try:
+            mb_pid = int(menubar_pid_file.read_text().strip())
+            os.kill(mb_pid, 0)
+            click.echo(click.style("  ● ", fg="green") + f"menubar (PID {mb_pid})")
+        except (ProcessLookupError, ValueError):
+            click.echo(click.style("  ○ ", fg="red") + "menubar (stale PID)")
 
 
 @cli.command()

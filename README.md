@@ -74,6 +74,7 @@ Install the companion Expo app on your phone and point it at your server's Tails
 | `ccr start` | Start the API server |
 | `ccr start -d` | Start in background (daemon mode) |
 | `ccr start --no-auth` | Start without Tailscale auth (local dev) |
+| `ccr start --menubar` | Start with macOS menubar status indicator |
 | `ccr stop` | Stop the API server |
 | `ccr status` | Show server and Tailscale status |
 | `ccr doctor` | Check all prerequisites |
@@ -86,7 +87,9 @@ Install the companion Expo app on your phone and point it at your server's Tails
 |----------|--------|-------------|
 | `/api/status` | GET | Server health check |
 | `/api/sessions` | GET, POST | List or create sessions |
-| `/api/sessions/{id}` | GET, DELETE | Get or delete a session |
+| `/api/sessions/search` | GET | Full-text search across sessions |
+| `/api/sessions/{id}` | GET, DELETE, PATCH | Get, delete, or update (rename) a session |
+| `/api/sessions/{id}/export` | GET | Export session data |
 | `/api/sessions/{id}/send` | POST | Send a prompt to a session |
 | `/api/sessions/{id}/approve` | POST | Approve tool use |
 | `/api/sessions/{id}/deny` | POST | Deny tool use |
@@ -94,14 +97,35 @@ Install the companion Expo app on your phone and point it at your server's Tails
 | `/api/sessions/{id}/resume` | POST | Resume a paused session |
 | `/api/sessions/{id}/archive` | POST | Archive a session |
 | `/api/sessions/{id}/unarchive` | POST | Unarchive a session |
+| `/api/sessions/{id}/git/status` | GET | Git status for session project |
+| `/api/sessions/{id}/git/diff` | GET | Git diff for session project |
+| `/api/sessions/{id}/git/branches` | GET | Git branches for session project |
+| `/api/sessions/{id}/git/log` | GET | Git log for session project |
+| `/api/sessions/{id}/collaborators` | POST, DELETE | Add or remove collaborators |
 | `/api/templates` | GET, POST | List or create templates |
 | `/api/templates/{id}` | PUT, DELETE | Update or delete a template |
 | `/api/projects` | GET, POST | Scan for or register projects |
+| `/api/projects/create` | POST | Create blank project (git init) |
+| `/api/projects/clone` | POST | Clone a git repo (background) |
+| `/api/projects/git-check` | GET | Check git/SSH setup |
 | `/api/push/register` | POST | Register Expo push token |
 | `/api/push/settings` | GET, PUT | Manage push settings |
+| `/api/approval-rules` | GET, POST | List or create auto-approval rules |
+| `/api/approval-rules/{id}` | DELETE | Delete an approval rule |
+| `/api/approval-rules/check` | GET | Check if tool is auto-approved |
+| `/api/mcp/servers` | GET, POST, DELETE | List, add, or remove MCP servers |
+| `/api/mcp/servers/{name}/health` | GET | MCP server health check |
+| `/api/usage` | GET | Claude API usage data |
+| `/api/usage/history` | GET | Usage history over time |
+| `/api/skills` | GET | List available skills |
+| `/api/workflows` | GET, POST | List or create workflows |
+| `/api/workflows/{id}` | GET, DELETE | Get or delete a workflow |
+| `/api/workflows/{id}/run` | POST | Run a workflow |
+| `/api/workflows/{id}/steps` | POST | Add step to a workflow |
 | `/api/internal/approval-request` | POST | Hook: request tool approval |
 | `/api/internal/statusline` | POST | Hook: receive statusline data |
 | `/ws/sessions/{id}` | WS | Live session event stream |
+| `/ws/terminal/{project_id}` | WS | Interactive PTY terminal |
 
 ## Tool Approval
 

@@ -52,7 +52,7 @@ ccr start --no-auth     # Local dev mode (127.0.0.1, no Tailscale auth)
 
 ## CLI Commands
 
-- `ccr start` -- Start the API server
+- `ccr start` -- Start the API server (add `--menubar` for menubar indicator)
 - `ccr stop` -- Stop the API server
 - `ccr status` -- Show server status
 - `ccr doctor` -- Check prerequisites
@@ -68,6 +68,8 @@ ccr start --no-auth     # Local dev mode (127.0.0.1, no Tailscale auth)
 | `src/claude_code_remote/server_main.py` | Entry point for daemon mode subprocess |
 | `src/claude_code_remote/routes.py` | REST API routes (sessions, templates, projects, push, internal) |
 | `src/claude_code_remote/websocket.py` | WebSocket endpoint for session streaming |
+| `src/claude_code_remote/terminal.py` | Interactive PTY terminal via WebSocket |
+| `src/claude_code_remote/menubar.py` | macOS menubar status indicator (rumps) |
 | `src/claude_code_remote/session_manager.py` | Core session lifecycle and Claude Code subprocess management |
 | `src/claude_code_remote/models.py` | Pydantic data models |
 | `src/claude_code_remote/auth.py` | Tailscale WhoIs authentication middleware |
@@ -129,12 +131,14 @@ ccr start --no-auth     # Local dev mode (127.0.0.1, no Tailscale auth)
 - `POST /api/internal/approval-request` -- Hook: request tool approval (blocks until user decides)
 - `POST /api/internal/statusline` -- Hook: receive statusline data (model, context %, git branch)
 - `WS /ws/sessions/{id}` -- Live session stream
+- `WS /ws/terminal/{project_id}` -- Interactive PTY terminal
 
 ## Session Lifecycle
 
 ```
 CREATED → (send_prompt) → RUNNING [process spawned]
 RUNNING → (result event) → IDLE [process exited, ready for next prompt]
+RUNNING → (result event, final) → COMPLETED [session finished]
 IDLE → (send_prompt) → RUNNING [new process with --resume]
 RUNNING → (approval needed) → AWAITING_APPROVAL → (approved/denied) → RUNNING
 RUNNING → (pause) → PAUSED → (resume with prompt) → RUNNING
