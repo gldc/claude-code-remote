@@ -45,7 +45,7 @@ class SessionManager:
         self.session_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(self.session_dir, 0o700)
 
-    def create_session(self, req: SessionCreate) -> Session:
+    def create_session(self, req: SessionCreate, owner: str | None = None) -> Session:
         running = sum(
             1
             for s in self.sessions.values()
@@ -65,6 +65,7 @@ class SessionManager:
             skip_permissions=req.skip_permissions,
             use_sandbox=req.use_sandbox,
             allowed_tools=req.allowed_tools,
+            owner=owner,
         )
         self.sessions[session.id] = session
         self.persist_session(session.id)

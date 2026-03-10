@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import logging
+import os
 from pathlib import Path
 
 from .models import ApprovalRule
@@ -32,6 +33,8 @@ class ApprovalRulesStore:
         self.rules_file.parent.mkdir(parents=True, exist_ok=True)
         data = [r.model_dump(mode="json") for r in self.rules.values()]
         self.rules_file.write_text(json.dumps(data, indent=2))
+        # Approval rules control tool execution — restrict to owner only
+        os.chmod(self.rules_file, 0o600)
 
     def create(
         self,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 EXPO_TOKEN_RE = re.compile(r"^ExponentPushToken\[.+\]$")
+
+# Maximum lengths for push notification fields to prevent abuse
+_MAX_TITLE_LEN = 100
+_MAX_BODY_LEN = 500
 
 
 class PushManager:
@@ -45,6 +50,8 @@ class PushManager:
                 indent=2,
             )
         )
+        # Push tokens are sensitive — restrict to owner only
+        os.chmod(self.push_file, 0o600)
 
     @staticmethod
     def validate_token(token: str) -> None:
@@ -67,6 +74,15 @@ class PushManager:
         self.settings = settings
         self._save()
 
+    @staticmethod
+    def _sanitize_text(text: str, max_len: int) -> str:
+        """Truncate and strip control characters from notification text."""
+        # Remove control characters (except newline which is useful in bodies)
+        cleaned = re.sub(r"[\x00-\x09\x0b-\x1f\x7f]", "", text)
+        if len(cleaned) > max_len:
+            cleaned = cleaned[:max_len] + "..."
+        return cleaned
+
     async def send(
         self,
         title: str,
@@ -80,10 +96,20 @@ class PushManager:
         if not self.tokens:
             return
 
+        # Sanitize text fields
+        title = self._sanitize_text(title, _MAX_TITLE_LEN)
+        body = self._sanitize_text(body, _MAX_BODY_LEN)
+
+        # Strip any sensitive keys from data payload
+        safe_data = {}
+        if data:
+            allowed_keys = {"session_id", "type", "tool_name"}
+            safe_data = {k: v for k, v in data.items() if k in allowed_keys}
+
         base_msg: dict[str, Any] = {
             "title": title,
             "body": body,
-            "data": data or {},
+            "data": safe_data,
         }
         if sound is not None:
             base_msg["sound"] = sound
@@ -101,20 +127,26 @@ class PushManager:
             logger.error(f"Failed to send push notification: {e}")
 
     def _summarize_tool_input(self, tool_name: str, tool_input: dict) -> str:
-        """Build a one-line summary of tool input for notification body."""
-        max_len = 200
+        """Build a one-line summary of tool input for notification body.
+
+        Only exposes the minimum info needed (base command name, filename)
+        to avoid leaking full paths or command arguments.
+        """
         if tool_name == "Bash" and "command" in tool_input:
-            cmd = tool_input["command"]
-            return f"Bash: {cmd[:max_len]}{'...' if len(cmd) > max_len else ''}"
-        if tool_name in ("Edit", "Write") and "file_path" in tool_input:
-            return f"{tool_name}: {tool_input['file_path']}"
-        if tool_name == "Read" and "file_path" in tool_input:
-            return f"Read: {tool_input['file_path']}"
-        # Generic fallback
-        summary = json.dumps(tool_input, default=str)
-        return (
-            f"{tool_name}: {summary[:max_len]}{'...' if len(summary) > max_len else ''}"
-        )
+            # Show only the base command name (first word, basename only)
+            first_word = (
+                tool_input["command"].split()[0]
+                if tool_input["command"].strip()
+                else "bash"
+            )
+            base_cmd = Path(first_word).name[:50]
+            return f"Bash: {base_cmd}"
+        if tool_name in ("Edit", "Write", "Read") and "file_path" in tool_input:
+            # Show only the filename, not the full path
+            filename = Path(tool_input["file_path"]).name
+            return f"{tool_name}: {filename}"
+        # Generic fallback: just show the tool name, do NOT dump raw input
+        return tool_name
 
     async def notify_approval(
         self, session_name: str, tool_name: str, tool_input: dict, session_id: str
@@ -158,13 +190,30 @@ class PushManager:
                 thread_id=session_id,
             )
 
+    @staticmethod
+    def _sanitize_error(error: str) -> str:
+        """Strip file paths and stack traces from error strings.
+
+        Returns a safe summary suitable for push notifications.
+        """
+        # Strip absolute file paths (e.g. /home/user/project/file.py)
+        sanitized = re.sub(r"/[^\s:,\"']+", "<path>", error)
+        # Strip anything that looks like a stack trace line
+        sanitized = re.sub(r"(File\s+[\"'].*?[\"'],\s+line\s+\d+.*)", "", sanitized)
+        # Collapse whitespace
+        sanitized = re.sub(r"\s+", " ", sanitized).strip()
+        if not sanitized:
+            return "Session error"
+        return sanitized[:100]
+
     async def notify_error(
         self, session_name: str, error: str, session_id: str
     ) -> None:
         if self.settings.notify_errors:
+            safe_error = self._sanitize_error(error)
             await self.send(
                 "Session Error",
-                f"Session '{session_name}': {error[:100]}",
+                f"Session '{session_name}': {safe_error}",
                 {"session_id": session_id, "type": "session_error"},
                 thread_id=session_id,
             )

@@ -34,7 +34,14 @@ def start(daemon, no_auth):
 
     if no_auth:
         host = "127.0.0.1"
-        click.echo(f"Starting server on {host}:{port} (auth disabled)")
+        click.echo(
+            click.style("WARNING: ", fg="yellow")
+            + f"Auth disabled — binding to localhost only ({host}:{port})"
+        )
+        click.echo(
+            "  This mode is for local development only. "
+            "The server will NOT be accessible over the network."
+        )
     else:
         host = tailscale.require_ip()
         click.echo(f"Starting server on {host}:{port}")

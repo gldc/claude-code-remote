@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
@@ -321,6 +322,43 @@ class MCPServer(BaseModel):
     url: str | None = None  # for sse
     env: dict[str, str] = Field(default_factory=dict)
     scope: str = "global"  # "global" or "project"
+
+    @field_validator("command")
+    @classmethod
+    def validate_command(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        # Block shell meta-characters and path traversal
+        dangerous = [";", "&&", "||", "|", "`", "$(", "${", ">", "<", "\n", "\r"]
+        for ch in dangerous:
+            if ch in v:
+                raise ValueError(
+                    f"MCP command must not contain shell metacharacter: {ch!r}"
+                )
+        if ".." in v.split("/"):
+            raise ValueError("MCP command must not contain '..' path traversal")
+        # Enforce absolute paths: if not already absolute, resolve via shutil.which
+        if not Path(v).is_absolute():
+            resolved = shutil.which(v)
+            if resolved:
+                v = resolved
+            else:
+                raise ValueError(
+                    f"MCP command {v!r} is not an absolute path and could not be found on PATH"
+                )
+        return v
+
+    @field_validator("args")
+    @classmethod
+    def validate_args(cls, v: list[str]) -> list[str]:
+        dangerous = [";", "&&", "||", "|", "`", "$(", "${", "\n", "\r"]
+        for i, arg in enumerate(v):
+            for ch in dangerous:
+                if ch in arg:
+                    raise ValueError(
+                        f"MCP arg[{i}] must not contain shell metacharacter: {ch!r}"
+                    )
+        return v
 
 
 class MCPHealthResult(BaseModel):

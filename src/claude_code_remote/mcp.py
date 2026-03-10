@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
+import socket
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .models import MCPServer, MCPHealthResult
 
@@ -202,6 +205,36 @@ def remove_mcp_server(
     return False
 
 
+def _is_safe_url(url: str) -> bool:
+    """Return True if *url* does not resolve to a private/loopback address.
+
+    Prevents SSRF attacks where an attacker supplies a URL pointing to
+    internal services (e.g. cloud metadata endpoints, localhost services).
+    """
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+
+        # Block common metadata / internal hostnames
+        blocked_hostnames = {"metadata.google.internal", "169.254.169.254"}
+        if hostname in blocked_hostnames:
+            return False
+
+        # Resolve hostname and check all addresses
+        infos = socket.getaddrinfo(
+            hostname, parsed.port or 80, proto=socket.IPPROTO_TCP
+        )
+        for _, _, _, _, sockaddr in infos:
+            addr = ipaddress.ip_address(sockaddr[0])
+            if addr.is_private or addr.is_loopback or addr.is_link_local:
+                return False
+        return True
+    except (socket.gaierror, ValueError, OSError):
+        return False
+
+
 async def check_mcp_health(server: MCPServer) -> MCPHealthResult:
     """Health check an MCP server by attempting to spawn/connect."""
     start = time.time()
@@ -224,6 +257,13 @@ async def check_mcp_health(server: MCPServer) -> MCPHealthResult:
                 latency_ms=latency,
             )
         elif server.type == "sse" and server.url:
+            # SSRF protection: block requests to private/internal addresses
+            if not await asyncio.to_thread(_is_safe_url, server.url):
+                return MCPHealthResult(
+                    name=server.name,
+                    healthy=False,
+                    error="URL resolves to a private or internal address",
+                )
             import httpx
 
             async with httpx.AsyncClient(timeout=5) as client:

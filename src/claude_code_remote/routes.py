@@ -35,6 +35,8 @@ from claude_code_remote.models import (
     WorkflowCreate,
     WorkflowStepCreate,
 )
+from starlette.requests import Request
+
 from claude_code_remote.session_manager import SessionManager
 from claude_code_remote.templates import TemplateStore
 from claude_code_remote.project_store import ProjectStore
@@ -133,22 +135,81 @@ def create_router(
 ) -> APIRouter:
     router = APIRouter()
 
+    def _get_caller_identity(request: Request) -> str | None:
+        """Extract the Tailscale identity stashed by auth middleware."""
+        return getattr(request.state, "tailscale_identity", None)
+
+    def _check_session_access(session_id: str, request: Request) -> None:
+        """Raise 403 if the caller is not the session owner or a collaborator.
+
+        Called for both read and mutating operations on session resources.
+        When auth is disabled (no identity on request), access is allowed.
+        """
+        identity = _get_caller_identity(request)
+        if identity is None:
+            # Auth disabled (--no-auth) — allow everything
+            return
+        session = session_mgr.get_session(session_id)
+        if session is None:
+            return  # Will 404 later
+        # Owner check
+        if session.owner and session.owner != identity:
+            # Collaborator check
+            if identity not in session.collaborators:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You do not have access to this session.",
+                )
+
+    def _check_session_owner(session_id: str, request: Request) -> None:
+        """Raise 403 if the caller is not the session owner.
+
+        Stricter than _check_session_access — collaborators are NOT allowed.
+        Used for privileged operations like managing collaborators.
+        When auth is disabled (no identity on request), access is allowed.
+        """
+        identity = _get_caller_identity(request)
+        if identity is None:
+            return
+        session = session_mgr.get_session(session_id)
+        if session is None:
+            return  # Will 404 later
+        if session.owner and session.owner != identity:
+            raise HTTPException(
+                status_code=403,
+                detail="Only the session owner can perform this action.",
+            )
+
     # --- Sessions ---
 
     @router.get("/sessions")
     async def list_sessions(
+        request: Request,
         status: SessionStatus | None = None,
         project_dir: str | None = None,
         archived: bool | None = None,
     ):
-        return session_mgr.list_sessions(
+        sessions = session_mgr.list_sessions(
             status=status, project_dir=project_dir, archived=archived
         )
+        identity = _get_caller_identity(request)
+        if identity is not None:
+            # Filter to only sessions the caller owns or collaborates on
+            sessions = [
+                s
+                for s in sessions
+                if not (full := session_mgr.get_session(s.id))
+                or not full.owner
+                or full.owner == identity
+                or identity in full.collaborators
+            ]
+        return sessions
 
     @router.post("/sessions", status_code=201)
-    async def create_session(req: SessionCreate):
+    async def create_session(req: SessionCreate, request: Request):
         try:
-            session = session_mgr.create_session(req)
+            identity = _get_caller_identity(request)
+            session = session_mgr.create_session(req, owner=identity)
             if req.initial_prompt:
                 await session_mgr.send_prompt(session.id, req.initial_prompt)
             return session
@@ -158,32 +219,46 @@ def create_router(
     # --- Search & Export (must be before /{session_id} catch-all) ---
 
     @router.get("/sessions/search")
-    async def search_sessions(q: str = ""):
+    async def search_sessions(q: str = "", request: Request = None):
         if not q or len(q) < 2:
             raise HTTPException(400, "Query must be at least 2 characters")
-        return session_mgr.search_sessions(q)
+        results = session_mgr.search_sessions(q)
+        identity = _get_caller_identity(request)
+        if identity is not None:
+            results = [
+                s
+                for s in results
+                if not s.owner
+                or s.owner == identity
+                or identity in getattr(s, "collaborators", [])
+            ]
+        return results
 
     @router.get("/sessions/{session_id}")
-    async def get_session(session_id: str):
+    async def get_session(session_id: str, request: Request):
+        _check_session_access(session_id, request)
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
         return session
 
     @router.get("/sessions/{session_id}/export")
-    async def export_session(session_id: str):
+    async def export_session(session_id: str, request: Request):
+        _check_session_access(session_id, request)
         data = session_mgr.export_session(session_id)
         if not data:
             raise HTTPException(404)
         return data
 
     @router.delete("/sessions/{session_id}", status_code=204)
-    async def delete_session(session_id: str):
+    async def delete_session(session_id: str, request: Request):
+        _check_session_access(session_id, request)
         session_mgr.delete_session(session_id)
         return Response(status_code=204)
 
     @router.patch("/sessions/{session_id}")
-    async def update_session(session_id: str, body: SessionUpdate):
+    async def update_session(session_id: str, body: SessionUpdate, request: Request):
+        _check_session_access(session_id, request)
         if not session_mgr.get_session(session_id):
             raise HTTPException(404, "Session not found")
         if body.name:
@@ -191,17 +266,20 @@ def create_router(
         return session_mgr.get_summary(session_id)
 
     @router.post("/sessions/{session_id}/archive")
-    async def archive_session(session_id: str):
+    async def archive_session(session_id: str, request: Request):
+        _check_session_access(session_id, request)
         session_mgr.archive_session(session_id, archived=True)
         return {"ok": True}
 
     @router.post("/sessions/{session_id}/unarchive")
-    async def unarchive_session(session_id: str):
+    async def unarchive_session(session_id: str, request: Request):
+        _check_session_access(session_id, request)
         session_mgr.archive_session(session_id, archived=False)
         return {"ok": True}
 
     @router.post("/sessions/{session_id}/send")
-    async def send_prompt(session_id: str, body: SendPromptRequest):
+    async def send_prompt(session_id: str, body: SendPromptRequest, request: Request):
+        _check_session_access(session_id, request)
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
@@ -209,51 +287,64 @@ def create_router(
         return {"ok": True}
 
     @router.post("/sessions/{session_id}/approve")
-    async def approve_tool(session_id: str):
+    async def approve_tool(session_id: str, request: Request):
+        _check_session_access(session_id, request)
         await session_mgr.approve_tool_use(session_id)
         return {"ok": True}
 
     @router.post("/sessions/{session_id}/deny")
-    async def deny_tool(session_id: str, body: ApprovalResponse | None = None):
+    async def deny_tool(
+        session_id: str, request: Request, body: ApprovalResponse | None = None
+    ):
+        _check_session_access(session_id, request)
         reason = body.reason if body else None
         await session_mgr.deny_tool_use(session_id, reason)
         return {"ok": True}
 
     @router.post("/sessions/{session_id}/pause")
-    async def pause_session(session_id: str):
+    async def pause_session(session_id: str, request: Request):
+        _check_session_access(session_id, request)
         await session_mgr.pause_session(session_id)
         return {"ok": True}
 
     @router.post("/sessions/{session_id}/resume")
-    async def resume_session(session_id: str, body: ResumeSessionRequest):
+    async def resume_session(
+        session_id: str, body: ResumeSessionRequest, request: Request
+    ):
+        _check_session_access(session_id, request)
         await session_mgr.send_prompt(session_id, body.prompt)
         return {"ok": True}
 
     # --- Session Git ---
 
     @router.get("/sessions/{session_id}/git/status")
-    async def get_git_status(session_id: str):
+    async def get_git_status(session_id: str, request: Request):
+        _check_session_access(session_id, request)
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404)
         return await git_status(session.project_dir)
 
     @router.get("/sessions/{session_id}/git/diff")
-    async def get_git_diff(session_id: str, file: str | None = None):
+    async def get_git_diff(session_id: str, request: Request, file: str | None = None):
+        _check_session_access(session_id, request)
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404)
         return {"diff": await git_diff(session.project_dir, file)}
 
     @router.get("/sessions/{session_id}/git/branches")
-    async def get_git_branches(session_id: str):
+    async def get_git_branches(session_id: str, request: Request):
+        _check_session_access(session_id, request)
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404)
         return await git_branches(session.project_dir)
 
     @router.get("/sessions/{session_id}/git/log")
-    async def get_git_log(session_id: str, n: int = 10):
+    async def get_git_log(session_id: str, request: Request, n: int = 10):
+        n = min(n, 100)
+        _check_session_access(session_id, request)
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404)
@@ -262,7 +353,10 @@ def create_router(
     # --- Session Collaboration ---
 
     @router.post("/sessions/{session_id}/collaborators")
-    async def add_collaborator(session_id: str, body: CollaboratorRequest):
+    async def add_collaborator(
+        session_id: str, body: CollaboratorRequest, request: Request
+    ):
+        _check_session_owner(session_id, request)
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(404)
@@ -272,7 +366,8 @@ def create_router(
         return {"collaborators": session.collaborators}
 
     @router.delete("/sessions/{session_id}/collaborators/{identity}")
-    async def remove_collaborator(session_id: str, identity: str):
+    async def remove_collaborator(session_id: str, identity: str, request: Request):
+        _check_session_owner(session_id, request)
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(404)
@@ -374,7 +469,10 @@ def create_router(
         _, stderr = await proc.communicate()
         if proc.returncode != 0:
             shutil.rmtree(project_path, ignore_errors=True)
-            raise HTTPException(500, f"git init failed: {stderr.decode().strip()}")
+            logger.error(
+                "git init failed for %s: %s", safe_name, stderr.decode().strip()
+            )
+            raise HTTPException(500, "git init failed")
 
         project = Project(
             id=Project.id_from_path(str(project_path)),
@@ -443,7 +541,17 @@ def create_router(
                 if proc.returncode == 0:
                     project_store.update_status(project.id, "ready")
                 else:
-                    error_msg = stderr.decode().strip() or "Clone failed"
+                    raw_err = stderr.decode().strip()
+                    logger.error("git clone failed for %s: %s", safe_name, raw_err)
+                    # Expose only a safe summary, not raw stderr
+                    error_msg = "Clone failed"
+                    if "not found" in raw_err.lower():
+                        error_msg = "Repository not found"
+                    elif (
+                        "authentication" in raw_err.lower()
+                        or "permission" in raw_err.lower()
+                    ):
+                        error_msg = "Authentication failed"
                     shutil.rmtree(project_path, ignore_errors=True)
                     project_store.update_status(project.id, "error", error_msg)
             except asyncio.TimeoutError:
@@ -452,8 +560,9 @@ def create_router(
                     project.id, "error", "Clone timed out (5 min)"
                 )
             except Exception as e:
+                logger.error("git clone error for %s: %s", safe_name, e)
                 shutil.rmtree(project_path, ignore_errors=True)
-                project_store.update_status(project.id, "error", str(e))
+                project_store.update_status(project.id, "error", "Clone failed")
 
         asyncio.create_task(_do_clone())
         return project

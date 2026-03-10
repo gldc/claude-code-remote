@@ -8,6 +8,7 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from claude_code_remote.auth import identify_tailscale_client
 from claude_code_remote.session_manager import SessionManager
 from claude_code_remote.models import WSMessage
 
@@ -23,6 +24,18 @@ def create_ws_router(session_mgr: SessionManager) -> APIRouter:
         if not session:
             await websocket.close(code=4004, reason="Session not found")
             return
+
+        # Ownership check: perform Tailscale identity lookup directly
+        # (BaseHTTPMiddleware does NOT set state on WebSocket connections)
+        if session.owner:
+            client_ip = websocket.client.host if websocket.client else None
+            identity = await identify_tailscale_client(client_ip) if client_ip else None
+            if not identity or (
+                identity != session.owner
+                and identity not in getattr(session, "collaborators", [])
+            ):
+                await websocket.close(code=4003, reason="Not authorized")
+                return
 
         await websocket.accept()
 
@@ -49,7 +62,9 @@ def create_ws_router(session_mgr: SessionManager) -> APIRouter:
         except WebSocketDisconnect:
             pass
         except Exception as e:
-            logger.error(f"WebSocket error for session {session_id}: {e}")
+            logger.error(
+                "WebSocket error for session %s: %s", session_id, type(e).__name__
+            )
         finally:
             session_mgr.unsubscribe(session_id, on_event)
 

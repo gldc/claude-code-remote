@@ -18,6 +18,7 @@ from collections.abc import Callable
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from claude_code_remote.auth import identify_tailscale_client
 from claude_code_remote.models import Project
 
 logger = logging.getLogger(__name__)
@@ -246,6 +247,15 @@ def create_terminal_router(
 
     @router.websocket("/ws/terminal/{project_id}")
     async def terminal_stream(websocket: WebSocket, project_id: str):
+        # Auth check: verify caller is on the Tailnet.
+        # BaseHTTPMiddleware does NOT cover WebSocket connections,
+        # so we perform the identity lookup directly.
+        client_ip = websocket.client.host if websocket.client else None
+        identity = await identify_tailscale_client(client_ip) if client_ip else None
+        if not identity:
+            await websocket.close(code=4003, reason="Not authorized")
+            return
+
         project = resolve_project(project_id)
         if not project:
             await websocket.close(code=4004, reason="Project not found")
