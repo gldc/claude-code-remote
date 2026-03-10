@@ -219,17 +219,27 @@ def create_router(
     # --- Search & Export (must be before /{session_id} catch-all) ---
 
     @router.get("/sessions/search")
-    async def search_sessions(q: str = ""):
+    async def search_sessions(q: str = "", request: Request = None):
         if not q or len(q) < 2:
             raise HTTPException(400, "Query must be at least 2 characters")
-        return session_mgr.search_sessions(q)
+        results = session_mgr.search_sessions(q)
+        identity = _get_caller_identity(request)
+        if identity is not None:
+            results = [
+                s
+                for s in results
+                if not s.owner
+                or s.owner == identity
+                or identity in getattr(s, "collaborators", [])
+            ]
+        return results
 
     @router.get("/sessions/{session_id}")
     async def get_session(session_id: str, request: Request):
+        _check_session_access(session_id, request)
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
-        _check_session_access(session_id, request)
         return session
 
     @router.get("/sessions/{session_id}/export")
@@ -333,6 +343,7 @@ def create_router(
 
     @router.get("/sessions/{session_id}/git/log")
     async def get_git_log(session_id: str, request: Request, n: int = 10):
+        n = min(n, 100)
         _check_session_access(session_id, request)
         session = session_mgr.get_session(session_id)
         if not session:
