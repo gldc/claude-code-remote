@@ -20,15 +20,23 @@ from claude_code_remote.models import (
     WSMessage,
     WSMessageType,
 )
+from claude_code_remote.push import PushManager
 
 logger = logging.getLogger(__name__)
 
 
 class SessionManager:
-    def __init__(self, session_dir: Path, max_concurrent: int = 5, api_url: str = ""):
+    def __init__(
+        self,
+        session_dir: Path,
+        max_concurrent: int = 5,
+        api_url: str = "",
+        push_mgr: PushManager | None = None,
+    ):
         self.session_dir = session_dir
         self.max_concurrent = max_concurrent
         self.api_url = api_url
+        self.push_mgr = push_mgr
         self.sessions: dict[str, Session] = {}
         self.processes: dict[str, asyncio.subprocess.Process] = {}
         self.ws_subscribers: dict[str, list[Callable]] = {}
@@ -424,9 +432,29 @@ class SessionManager:
         if session.status == SessionStatus.RUNNING:
             if proc.returncode == 0:
                 session.status = SessionStatus.IDLE
+                # Send push notification for successful completion
+                if self.push_mgr:
+                    try:
+                        await self.push_mgr.notify_completion(
+                            session.name, session.total_cost_usd, session.id
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"[session {session_id}] Push notification error: {e}"
+                        )
             else:
                 session.status = SessionStatus.ERROR
                 session.error_message = f"Process exited with code {proc.returncode}"
+                # Send push notification for error
+                if self.push_mgr:
+                    try:
+                        await self.push_mgr.notify_error(
+                            session.name, session.error_message, session.id
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"[session {session_id}] Push notification error: {e}"
+                        )
             session.updated_at = datetime.now(timezone.utc)
             self.persist_session(session_id)
         self.processes.pop(session_id, None)
@@ -542,6 +570,13 @@ class SessionManager:
         )
         session.messages.append(ws_msg.model_dump(mode="json"))
         await self._broadcast(session_id, ws_msg)
+
+        # Send push notification for approval request
+        if self.push_mgr:
+            try:
+                await self.push_mgr.notify_approval(session.name, tool_name, session.id)
+            except Exception as e:
+                logger.error(f"[session {session_id}] Push notification error: {e}")
 
         # Create a future and wait for the user's decision
         loop = asyncio.get_event_loop()
