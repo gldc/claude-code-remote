@@ -44,15 +44,16 @@ def create_app(
     config = load_config()
 
     api_url = f"http://{host}:{port}"
+    push_mgr = PushManager(PUSH_FILE)
     session_mgr = SessionManager(
         session_dir=SESSION_DIR,
         max_concurrent=config.get("max_concurrent_sessions", 5),
         api_url=api_url,
+        push_mgr=push_mgr,
     )
     session_mgr.load_sessions()
 
     template_store = TemplateStore(TEMPLATE_DIR)
-    push_mgr = PushManager(PUSH_FILE)
     usage_client = UsageClient(USAGE_HISTORY_FILE)
     approval_store = ApprovalRulesStore(APPROVAL_RULES_FILE)
     workflow_engine = WorkflowEngine(WORKFLOW_DIR)
