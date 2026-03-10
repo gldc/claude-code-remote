@@ -155,6 +155,7 @@ class PushManager:
                 "Task Complete",
                 f"Session '{session_name}' finished (${cost:.2f})",
                 {"session_id": session_id, "type": "session_completed"},
+                thread_id=session_id,
             )
 
     async def notify_error(
@@ -165,4 +166,5 @@ class PushManager:
                 "Session Error",
                 f"Session '{session_name}': {error[:100]}",
                 {"session_id": session_id, "type": "session_error"},
+                thread_id=session_id,
             )
