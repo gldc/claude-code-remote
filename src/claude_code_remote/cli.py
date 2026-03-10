@@ -1,7 +1,9 @@
 """CLI entry point -- the `ccr` command."""
 
 import json
+import os
 import shutil
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -46,6 +48,22 @@ def start(daemon, no_auth, menubar):
     else:
         host = tailscale.require_ip()
         click.echo(f"Starting server on {host}:{port}")
+
+    # Check for port conflicts before starting
+    test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        test_sock.bind((host, port))
+    except OSError as e:
+        if e.errno in (48, 98):  # EADDRINUSE: 48 on macOS, 98 on Linux
+            click.echo(
+                click.style("ERROR: ", fg="red")
+                + f"Port {port} already in use on {host}"
+            )
+            click.echo(f"  Run `ccr stop` or find the process with `lsof -i :{port}`")
+            sys.exit(1)
+        raise
+    finally:
+        test_sock.close()
 
     if daemon:
         log_file = LOG_DIR / "server.log"
@@ -101,6 +119,9 @@ def start(daemon, no_auth, menubar):
             click.echo(f"Menubar running (PID {menubar_proc.pid})")
     else:
         menubar_proc = None
+        pid_file = PID_DIR / "server.pid"
+        pid_file.write_text(str(os.getpid()))
+
         if menubar:
             menubar_proc = subprocess.Popen(
                 [
@@ -123,6 +144,7 @@ def start(daemon, no_auth, menubar):
         try:
             run_server(host=host, port=port, skip_auth=no_auth)
         finally:
+            pid_file.unlink(missing_ok=True)
             if menubar_proc:
                 menubar_proc.terminate()
                 try:
@@ -137,7 +159,6 @@ def stop():
     """Stop the API server."""
     from claude_code_remote.config import PID_DIR
     import signal
-    import os
 
     for name in ["server", "menubar", "caffeinate"]:
         pid_file = PID_DIR / f"{name}.pid"
@@ -159,7 +180,6 @@ def status():
     """Show server status."""
     from claude_code_remote import tailscale
     from claude_code_remote.config import PID_DIR, load_config
-    import os
 
     ip = tailscale.get_ip()
     dns = tailscale.get_dns_name()
