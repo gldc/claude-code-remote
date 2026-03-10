@@ -72,20 +72,27 @@ class PushManager:
         title: str,
         body: str,
         data: dict[str, Any] | None = None,
+        *,
+        category: str | None = None,
+        thread_id: str | None = None,
+        sound: str | None = "default",
     ) -> None:
         if not self.tokens:
             return
 
-        messages = [
-            {
-                "to": token,
-                "title": title,
-                "body": body,
-                "data": data or {},
-                "sound": "default",
-            }
-            for token in self.tokens
-        ]
+        base_msg: dict[str, Any] = {
+            "title": title,
+            "body": body,
+            "data": data or {},
+        }
+        if sound is not None:
+            base_msg["sound"] = sound
+        if category:
+            base_msg["categoryIdentifier"] = category
+        if thread_id:
+            base_msg["threadId"] = thread_id
+
+        messages = [{"to": token, **base_msg} for token in self.tokens]
 
         try:
             async with httpx.AsyncClient() as client:

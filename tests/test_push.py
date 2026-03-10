@@ -46,3 +46,39 @@ async def test_send_notification(push_mgr):
         mock_client.post = AsyncMock()
         await push_mgr.send("Test Title", "Test body", {"session_id": "123"})
         mock_client.post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_send_with_category_and_thread_id(push_mgr):
+    push_mgr.register_token("ExponentPushToken[abc123]")
+    with patch("claude_code_remote.push.httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock()
+        await push_mgr.send(
+            "Test",
+            "Body",
+            {"key": "val"},
+            category="approval_request",
+            thread_id="sess123",
+        )
+        call_args = mock_client.post.call_args
+        payload = call_args[1]["json"][0]
+        assert payload["categoryIdentifier"] == "approval_request"
+        assert payload["threadId"] == "sess123"
+
+
+@pytest.mark.asyncio
+async def test_send_without_category_omits_fields(push_mgr):
+    push_mgr.register_token("ExponentPushToken[abc123]")
+    with patch("claude_code_remote.push.httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock()
+        await push_mgr.send("Test", "Body")
+        call_args = mock_client.post.call_args
+        payload = call_args[1]["json"][0]
+        assert "categoryIdentifier" not in payload
+        assert "threadId" not in payload
