@@ -51,6 +51,7 @@ def start(daemon, no_auth, menubar):
 
     # Check for port conflicts before starting
     test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    test_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         test_sock.bind((host, port))
     except OSError as e:
