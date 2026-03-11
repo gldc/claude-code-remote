@@ -261,23 +261,21 @@ class StatuslineRequest(BaseModel):
 
 
 class UsageWindow(BaseModel):
-    percent_remaining: float = 0.0
-    resets_in_seconds: int = 0
-
-
-class UsageWindowWithReserve(UsageWindow):
-    reserve_percent: float = 0.0
+    utilization: float = 0.0
+    resets_at: str | None = None
 
 
 class ExtraUsage(BaseModel):
-    monthly_spend: float = 0.0
+    is_enabled: bool = False
     monthly_limit: float = 0.0
+    used_credits: float = 0.0
 
 
 class UsageData(BaseModel):
-    session: UsageWindow = Field(default_factory=UsageWindow)
-    weekly: UsageWindowWithReserve = Field(default_factory=UsageWindowWithReserve)
-    sonnet: UsageWindow = Field(default_factory=UsageWindow)
+    five_hour: UsageWindow = Field(default_factory=UsageWindow)
+    seven_day: UsageWindow = Field(default_factory=UsageWindow)
+    seven_day_sonnet: UsageWindow | None = None
+    seven_day_opus: UsageWindow | None = None
     extra_usage: ExtraUsage = Field(default_factory=ExtraUsage)
     plan_tier: str = "unknown"
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
