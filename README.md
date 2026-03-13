@@ -19,9 +19,9 @@ Expo App (Phone) --> Tailscale VPN --> Mac --> FastAPI Server --> Claude Code CL
 |------|------|
 | [Tailscale](https://tailscale.com/pricing) | Free for personal use |
 | [FastAPI](https://fastapi.tiangolo.com) + [Uvicorn](https://www.uvicorn.org) | Free and open-source |
-| Claude Code CLI | Requires an [Anthropic API plan](https://www.anthropic.com/pricing) (usage-based) |
+| Claude Code CLI | Any plan that includes Claude Code ([Max](https://www.anthropic.com/pricing), [Pro](https://www.anthropic.com/pricing), or [API](https://www.anthropic.com/pricing)) |
 
-The only ongoing cost is your Claude Code API usage.
+You can also run Claude Code with local models via [Ollama](https://ollama.com) for a fully free setup.
 
 ## Prerequisites
 
