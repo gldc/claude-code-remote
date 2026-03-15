@@ -6,7 +6,7 @@ CCR session data and native Claude Code conversation history are stored locally 
 
 ## Solution
 
-A web dashboard served by the existing CCR FastAPI server, providing a unified view of all Claude Code sessions on the host machine -- both CCR-managed and native. Supports session browsing, detail views, lightweight analytics, and session resumption.
+A web dashboard served by the existing CCR FastAPI server, providing a unified view of all Claude Code sessions on the host machine -- both CCR-managed and native. Supports session browsing, detail views, lightweight analytics, session resumption, and cron job management.
 
 ## Data Sources
 
@@ -27,6 +27,15 @@ A web dashboard served by the existing CCR FastAPI server, providing a unified v
 - **Format:** JSON, one file per session
 - **Key fields:** id, name, project_dir, status, claude_session_id, current_model, total_cost_usd, context_percent, messages, created_at, updated_at, owner, collaborators, archived, git_branch, skip_permissions
 
+### Cron Jobs
+
+- **Location:** `~/.local/state/claude-code-remote/cron/{job_id}.json`
+- **History:** `~/.local/state/claude-code-remote/cron_history.jsonl`
+- **Existing API:** Full CRUD at `/api/cron-jobs/*` (list, create, get, update, delete, toggle, trigger, history)
+- **Key fields:** id, name, schedule (cron expression), enabled, execution_mode (SPAWN/PERSISTENT), session_config, persistent_session_id, project_dir, timeout_minutes, prompt_template, next_run_at, last_run_at, last_run_status
+- **Run history fields:** id, cron_job_id, session_id, status (success/error/running/timeout -- lowercase CronRunStatus enum), started_at, completed_at, cost_usd, error_message
+- **Session link:** Sessions have a `cron_job_id` field linking back to the cron job that spawned them
+
 ### Unified Session Model
 
 A Pydantic model (`DashboardSession`) in `models.py`, following the existing `Session`/`SessionSummary` pattern. A corresponding `DashboardSessionSummary` model is used for list responses.
@@ -36,7 +45,7 @@ A Pydantic model (`DashboardSession`) in `models.py`, following the existing `Se
 | id | str | CCR session ID or native sessionId (UUID) |
 | name | str | CCR name or derived from project dir basename |
 | project_dir | str | Both |
-| source | Literal["ccr", "native"] | Derived |
+| source | Literal["ccr", "native"] | Derived (cron-spawned sessions are "ccr" with cron_job_id set) |
 | status | str | CCR status or "active"/"completed" for native |
 | current_model | str \| None | Both (from last assistant event for native) |
 | total_cost_usd | float | CCR field or estimated from token usage for native |
@@ -48,6 +57,7 @@ A Pydantic model (`DashboardSession`) in `models.py`, following the existing `Se
 | updated_at | datetime | Both (last event timestamp for native) |
 | owner | str \| None | CCR only |
 | claude_session_id | str | CCR field or native sessionId |
+| cron_job_id | str \| None | CCR only -- links to parent cron job if spawned by one |
 
 Native session `project_dir`: derived from the first event's `cwd` field (stable since Claude Code sets the working directory at session start).
 
@@ -79,6 +89,9 @@ CORS: The SPA is served from the same origin as the API (`/dashboard` and `/api/
 - `GET /api/dashboard/analytics` -- Summary stats (total cost, session count, top model, active sessions). "This week" means rolling last 7 days.
 - `POST /api/dashboard/sessions/{id}/resume` -- Resume a native session in CCR. Request body: `{ "prompt": "string" }` (define as `DashboardResumeRequest` Pydantic model).
 
+**Cron job management:** The dashboard frontend calls the existing `/api/cron-jobs/*` endpoints directly for all CRUD operations. No new backend endpoints needed for cron -- the existing API is complete. The dashboard adds one enriched endpoint:
+- `GET /api/dashboard/cron-jobs` -- Returns all cron jobs with their last 5 runs inlined (avoids N+1 fetches from the frontend). Combines `cron_mgr.list_jobs()` with `cron_mgr.get_history(job_id, limit=5)` for each job. Response model: `CronJobWithRuns` (extends `CronJob` with `recent_runs: list[CronJobRun]`).
+
 **Wiring:** Dashboard routes added to the existing FastAPI app in `server.py`, behind the same Tailscale auth middleware. A catch-all route at `/dashboard/{path:path}` returns `index.html` to support client-side routing.
 
 ### Frontend (React + Vite)
@@ -100,15 +113,22 @@ CORS: The SPA is served from the same origin as the API (`/dashboard` and `/api/
 
 ## Views
 
+### Navigation
+
+Top-level nav with two tabs:
+- **Sessions** (`/dashboard`) -- default view
+- **Cron Jobs** (`/dashboard/cron`)
+
 ### Session List (main view at `/dashboard`)
 
 **Summary bar (top):**
 - Active sessions count
 - Total cost (rolling last 7 days)
 - Most-used model
+- Active cron jobs count
 
 **Session table:**
-- Columns: name, project, status, cost, model, last active, source badge (CCR/Native)
+- Columns: name, project, status, cost, model, last active, source badge (CCR/Native). CCR sessions with `cron_job_id` show an additional "Cron" sub-badge linking to the parent cron job.
 - Sortable by any column
 - Filterable by: status, project, source type, owner
 - Search: CCR sessions full-text, native sessions by name/project only (v1)
@@ -131,6 +151,34 @@ CORS: The SPA is served from the same origin as the API (`/dashboard` and `/api/
 **Resume actions:**
 - CCR sessions: "Resume" button (sends prompt via existing CCR API)
 - Native sessions: "Resume in CCR" button + "Copy resume command" button
+
+### Cron Jobs (at `/dashboard/cron`)
+
+**Cron job list:**
+- Table: name, schedule (human-readable), enabled toggle, last run status, next run time, execution mode badge (SPAWN/PERSISTENT), cost (last 7 days)
+- Actions per row: enable/disable toggle, "Trigger Now" button, edit, delete
+- "Create Cron Job" button opens a form
+
+**Cron job detail (at `/dashboard/cron/:id`):**
+- Header: name, schedule, enabled status, execution mode, project, prompt template
+- Run history table: status badge, started/completed timestamps, cost, session link, error message (if any)
+- "Trigger Now" button
+- Edit/delete actions
+- Link to persistent session (if PERSISTENT mode)
+
+**Cron job form (create/edit):**
+- Fields: name, schedule (cron expression with human-readable preview), execution mode (SPAWN/PERSISTENT), project directory, prompt template (with variable reference showing `{{date}}`, `{{time}}`, etc.), timeout, enabled
+- Session config section: model selection, skip_permissions toggle. The form constructs a `SessionCreate` object from these fields, using the prompt template as `initial_prompt` and the project directory as `session_config.project_dir`. The top-level `CronJob.project_dir` is a label (defaults to "cron") -- the actual working directory is `session_config.project_dir`.
+- Validate cron expression client-side before submit
+
+**API calls:** The frontend calls existing `/api/cron-jobs/*` endpoints directly:
+- `GET /api/dashboard/cron-jobs` for the enriched list (with recent runs inlined)
+- `POST /api/cron-jobs` to create
+- `PATCH /api/cron-jobs/{id}` to update
+- `DELETE /api/cron-jobs/{id}` to delete
+- `POST /api/cron-jobs/{id}/toggle` to enable/disable
+- `POST /api/cron-jobs/{id}/trigger` to trigger manually
+- `GET /api/cron-jobs/{id}/history` for full run history
 
 ### Analytics Summary
 
@@ -179,7 +227,7 @@ Native sessions don't have explicit cost fields. Estimate from token usage in as
 src/claude_code_remote/
 ├── native_sessions.py     (new: JSONL parsing and discovery)
 ├── dashboard.py           (new: dashboard API routes)
-├── models.py              (modified: add DashboardSession, DashboardSessionSummary, DashboardResumeRequest)
+├── models.py              (modified: add DashboardSession, DashboardSessionSummary, DashboardResumeRequest, CronJobWithRuns)
 ├── server.py              (modified: mount dashboard routes + static files + catch-all)
 └── dashboard/             (new: React frontend)
     ├── package.json
@@ -193,19 +241,24 @@ src/claude_code_remote/
     │   ├── types.ts         (TypeScript types matching unified model)
     │   ├── pages/
     │   │   ├── SessionList.tsx
-    │   │   └── SessionDetail.tsx
+    │   │   ├── SessionDetail.tsx
+    │   │   ├── CronList.tsx
+    │   │   └── CronDetail.tsx
     │   └── components/
     │       ├── SummaryBar.tsx
     │       ├── SessionTable.tsx
     │       ├── MessageTimeline.tsx
-    │       └── ResumeActions.tsx
+    │       ├── ResumeActions.tsx
+    │       ├── CronJobTable.tsx
+    │       ├── CronJobForm.tsx
+    │       └── CronRunHistory.tsx
     └── dist/               (built output, committed to repo)
 ```
 
 ## Out of Scope for v1
 
 - Charts or time-series visualizations
-- Session creation from the dashboard
+- Session creation from the dashboard (cron job creation is in scope)
 - Real-time WebSocket updates (polling is fine for v1)
 - Editing or deleting sessions from the dashboard
 - Multi-machine session aggregation
