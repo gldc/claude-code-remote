@@ -124,6 +124,7 @@ class SessionSummary(BaseModel):
     git_branch: str | None = None
     last_message_preview: str | None = None
     archived: bool = False
+    cron_job_id: str | None = None
 
 
 # --- Template ---
