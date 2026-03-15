@@ -16,6 +16,71 @@ from claude_code_remote import __version__
 CONTEXT_SETTINGS = dict(help_option_names=["-h", "--help"])
 
 
+def _find_pids_on_port(port: int) -> list[int]:
+    """Find PIDs with listening sockets on the given port using lsof."""
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f"TCP:{port}", "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            pids = []
+            for line in result.stdout.strip().splitlines():
+                try:
+                    pids.append(int(line.strip()))
+                except ValueError:
+                    continue
+            return pids
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return []
+
+
+def _wait_for_port_free(port: int, timeout: float = 2.0) -> bool:
+    """Poll until no process is listening on port. Returns True if freed."""
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _find_pids_on_port(port):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _kill_pids(pids: list[int], port: int) -> bool:
+    """SIGTERM the given PIDs, wait for port release, escalate to SIGKILL if needed.
+
+    Returns True if port was freed, False otherwise.
+    Raises PermissionError if all PIDs fail with PermissionError.
+    """
+    import signal
+
+    def _signal_pids(sig):
+        permission_errors = 0
+        for pid in pids:
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                permission_errors += 1
+        if permission_errors == len(pids):
+            raise PermissionError(f"Cannot signal PIDs {pids}: permission denied")
+
+    _signal_pids(signal.SIGTERM)
+
+    if _wait_for_port_free(port):
+        return True
+
+    # Escalate to SIGKILL
+    _signal_pids(signal.SIGKILL)
+
+    return _wait_for_port_free(port, timeout=1.0)
+
+
 @click.group(context_settings=CONTEXT_SETTINGS)
 @click.version_option(version=__version__, prog_name="ccr")
 def cli():
@@ -56,13 +121,40 @@ def start(daemon, no_auth, menubar):
         test_sock.bind((host, port))
     except OSError as e:
         if e.errno in (48, 98):  # EADDRINUSE: 48 on macOS, 98 on Linux
-            click.echo(
-                click.style("ERROR: ", fg="red")
-                + f"Port {port} already in use on {host}"
-            )
-            click.echo(f"  Run `ccr stop` or find the process with `lsof -i :{port}`")
-            sys.exit(1)
-        raise
+            pids = _find_pids_on_port(port)
+            if pids:
+                pid_str = ", ".join(str(p) for p in pids)
+                if click.confirm(
+                    f"Port {port} in use by PID {pid_str}. Kill and continue?",
+                    default=False,
+                ):
+                    try:
+                        if not _kill_pids(pids, port):
+                            click.echo(
+                                click.style("ERROR: ", fg="red")
+                                + f"Could not free port {port}"
+                            )
+                            sys.exit(1)
+                    except PermissionError:
+                        click.echo(
+                            click.style("ERROR: ", fg="red")
+                            + f"Port {port} is in use by another user's process"
+                        )
+                        sys.exit(1)
+                    click.echo(f"Killed process(es) on port {port}")
+                else:
+                    sys.exit(1)
+            else:
+                click.echo(
+                    click.style("ERROR: ", fg="red")
+                    + f"Port {port} already in use on {host}"
+                )
+                click.echo(
+                    f"  Run `ccr stop` or find the process with `lsof -i :{port}`"
+                )
+                sys.exit(1)
+        else:
+            raise
     finally:
         test_sock.close()
 
@@ -158,8 +250,10 @@ def start(daemon, no_auth, menubar):
 @cli.command()
 def stop():
     """Stop the API server."""
-    from claude_code_remote.config import PID_DIR
+    from claude_code_remote.config import PID_DIR, load_config
     import signal
+
+    server_killed_via_pid = False
 
     for name in ["server", "menubar", "caffeinate"]:
         pid_file = PID_DIR / f"{name}.pid"
@@ -168,12 +262,39 @@ def stop():
                 pid = int(pid_file.read_text().strip())
                 os.kill(pid, signal.SIGTERM)
                 click.echo(f"Stopped {name} (PID {pid})")
+                if name == "server":
+                    server_killed_via_pid = True
             except (ProcessLookupError, PermissionError, ValueError):
                 click.echo(f"{name} was not running")
             pid_file.unlink(missing_ok=True)
         else:
             if name == "server":
-                click.echo(f"{name} is not running")
+                pass  # Don't print "not running" yet — check port fallback first
+
+    if not server_killed_via_pid:
+        # Fallback: check if something is listening on the configured port
+        config = load_config()
+        port = config.get("port", 8080)
+        pids = _find_pids_on_port(port)
+        if pids:
+            try:
+                if _kill_pids(pids, port):
+                    click.echo(
+                        f"Stopped orphaned server process "
+                        f"(PID {', '.join(str(p) for p in pids)}) on port {port}"
+                    )
+                else:
+                    click.echo(
+                        click.style("WARNING: ", fg="yellow")
+                        + f"Process on port {port} did not exit after SIGKILL"
+                    )
+            except PermissionError:
+                click.echo(
+                    click.style("ERROR: ", fg="red")
+                    + f"Port {port} is in use by another user's process"
+                )
+        else:
+            click.echo("server is not running")
 
 
 @cli.command()
