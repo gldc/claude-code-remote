@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +16,7 @@ from claude_code_remote.models import (
     CronJobRun,
     CronJobUpdate,
     CronRunStatus,
+    SessionStatus,
 )
 
 if TYPE_CHECKING:
@@ -268,7 +268,7 @@ class CronManager:
                 # Persistent mode -- reuse or create session
                 if job.persistent_session_id:
                     existing = self.session_mgr.sessions.get(job.persistent_session_id)
-                    if existing and existing.status != "error":
+                    if existing and existing.status != SessionStatus.ERROR:
                         run.session_id = job.persistent_session_id
                         await self.session_mgr.send_prompt(
                             job.persistent_session_id, prompt
