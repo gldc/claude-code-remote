@@ -10,7 +10,7 @@ import shutil
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from starlette.responses import Response
 
 from claude_code_remote.models import (
@@ -34,6 +34,8 @@ from claude_code_remote.models import (
     WorkflowStep,
     WorkflowCreate,
     WorkflowStepCreate,
+    CronJobCreate,
+    CronJobUpdate,
 )
 from starlette.requests import Request
 
@@ -132,6 +134,7 @@ def create_router(
     approval_store=None,
     workflow_engine=None,
     project_store: ProjectStore | None = None,
+    cron_mgr=None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -741,5 +744,60 @@ def create_router(
             return wf
         except ValueError as e:
             raise HTTPException(404, str(e))
+
+    # --- Cron Jobs ---
+
+    @router.get("/cron-jobs")
+    async def list_cron_jobs():
+        if not cron_mgr:
+            return []
+        return cron_mgr.list()
+
+    @router.post("/cron-jobs", status_code=201)
+    async def create_cron_job(req: CronJobCreate):
+        try:
+            return cron_mgr.create(req)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
+    @router.get("/cron-jobs/{job_id}")
+    async def get_cron_job(job_id: str):
+        job = cron_mgr.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Cron job not found")
+        return job
+
+    @router.patch("/cron-jobs/{job_id}")
+    async def update_cron_job(job_id: str, req: CronJobUpdate):
+        try:
+            return cron_mgr.update(job_id, req)
+        except ValueError as e:
+            if "not found" in str(e):
+                raise HTTPException(status_code=404, detail=str(e))
+            raise HTTPException(status_code=422, detail=str(e))
+
+    @router.delete("/cron-jobs/{job_id}", status_code=204)
+    async def delete_cron_job(job_id: str):
+        cron_mgr.delete(job_id)
+        return Response(status_code=204)
+
+    @router.post("/cron-jobs/{job_id}/toggle")
+    async def toggle_cron_job(job_id: str):
+        try:
+            return cron_mgr.toggle(job_id)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Cron job not found")
+
+    @router.post("/cron-jobs/{job_id}/trigger")
+    async def trigger_cron_job(job_id: str, background_tasks: BackgroundTasks):
+        job = cron_mgr.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Cron job not found")
+        background_tasks.add_task(cron_mgr.execute_job, job_id)
+        return {"status": "triggered"}
+
+    @router.get("/cron-jobs/{job_id}/history")
+    async def get_cron_job_history(job_id: str, limit: int = 50, offset: int = 0):
+        return cron_mgr.get_history(job_id, limit=limit, offset=offset)
 
     return router
