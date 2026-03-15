@@ -73,8 +73,10 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info("Server starting up")
+        await cron_mgr.start_scheduler()
         yield
         logger.info("Server shutting down")
+        await cron_mgr.shutdown_scheduler()
         await terminal_mgr.shutdown()
         await session_mgr.shutdown()
 
