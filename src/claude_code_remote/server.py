@@ -21,6 +21,8 @@ from claude_code_remote.config import (
     USAGE_HISTORY_FILE,
     APPROVAL_RULES_FILE,
     WORKFLOW_DIR,
+    CRON_DIR,
+    CRON_HISTORY_FILE,
 )
 from claude_code_remote.session_manager import SessionManager
 from claude_code_remote.templates import TemplateStore
@@ -29,6 +31,7 @@ from claude_code_remote.usage import UsageClient
 from claude_code_remote.approval_rules import ApprovalRulesStore
 from claude_code_remote.workflows import WorkflowEngine
 from claude_code_remote.project_store import ProjectStore
+from claude_code_remote.cron_manager import CronManager
 from claude_code_remote.projects import scan_directory
 from claude_code_remote.routes import create_router
 from claude_code_remote.websocket import create_ws_router
@@ -59,14 +62,21 @@ def create_app(
     approval_store = ApprovalRulesStore(APPROVAL_RULES_FILE)
     workflow_engine = WorkflowEngine(WORKFLOW_DIR)
     project_store = ProjectStore(PROJECTS_FILE)
+    cron_mgr = CronManager(
+        cron_dir=CRON_DIR,
+        history_file=CRON_HISTORY_FILE,
+        session_mgr=session_mgr,
+    )
     terminal_mgr = TerminalManager()
     scan_dirs = config.get("scan_directories", ["~/Developer"])
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info("Server starting up")
+        await cron_mgr.start_scheduler()
         yield
         logger.info("Server shutting down")
+        await cron_mgr.shutdown_scheduler()
         await terminal_mgr.shutdown()
         await session_mgr.shutdown()
 
@@ -94,6 +104,7 @@ def create_app(
         approval_store=approval_store,
         workflow_engine=workflow_engine,
         project_store=project_store,
+        cron_mgr=cron_mgr,
     )
     app.include_router(api_router, prefix="/api")
 
@@ -122,6 +133,7 @@ def create_app(
     app.state.usage_client = usage_client
     app.state.approval_store = approval_store
     app.state.workflow_engine = workflow_engine
+    app.state.cron_mgr = cron_mgr
 
     return app
 

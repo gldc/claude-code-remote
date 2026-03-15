@@ -91,6 +91,7 @@ class SessionManager:
             git_branch=s.git_branch,
             last_message_preview=preview,
             archived=s.archived,
+            cron_job_id=s.cron_job_id,
         )
 
     def list_sessions(

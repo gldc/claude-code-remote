@@ -105,6 +105,7 @@ class Session(BaseModel):
     owner: str | None = None
     collaborators: list[str] = Field(default_factory=list)
     require_multi_approval: bool = False
+    cron_job_id: str | None = None
 
 
 class SessionSummary(BaseModel):
@@ -123,6 +124,7 @@ class SessionSummary(BaseModel):
     git_branch: str | None = None
     last_message_preview: str | None = None
     archived: bool = False
+    cron_job_id: str | None = None
 
 
 # --- Template ---
@@ -414,3 +416,70 @@ class Workflow(BaseModel):
 
 class CollaboratorRequest(BaseModel):
     identity: str
+
+
+# --- Cron Jobs ---
+
+
+class CronExecutionMode(str, Enum):
+    SPAWN = "spawn"
+    PERSISTENT = "persistent"
+
+
+class CronRunStatus(str, Enum):
+    SUCCESS = "success"
+    ERROR = "error"
+    RUNNING = "running"
+    TIMEOUT = "timeout"
+
+
+class CronJob(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
+    name: str
+    schedule: str
+    enabled: bool = True
+    execution_mode: CronExecutionMode
+    session_config: SessionCreate
+    persistent_session_id: str | None = None
+    project_dir: str = "cron"
+    timeout_minutes: int | None = None
+    prompt_template: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    next_run_at: datetime | None = None
+    last_run_at: datetime | None = None
+    last_run_status: CronRunStatus | None = None
+
+
+class CronJobCreate(BaseModel):
+    name: str
+    schedule: str
+    execution_mode: CronExecutionMode
+    session_config: SessionCreate
+    persistent_session_id: str | None = None
+    project_dir: str = "cron"
+    timeout_minutes: int | None = None
+    prompt_template: str | None = None
+    enabled: bool = True
+
+
+class CronJobUpdate(BaseModel):
+    name: str | None = None
+    schedule: str | None = None
+    execution_mode: CronExecutionMode | None = None
+    session_config: SessionCreate | None = None
+    project_dir: str | None = None
+    timeout_minutes: int | None = None
+    prompt_template: str | None = None
+    enabled: bool | None = None
+
+
+class CronJobRun(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
+    cron_job_id: str
+    session_id: str | None = None
+    status: CronRunStatus = CronRunStatus.RUNNING
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: datetime | None = None
+    cost_usd: float = 0.0
+    error_message: str | None = None
