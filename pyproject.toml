@@ -15,6 +15,8 @@ dependencies = [
     "pydantic>=2.0",
     "websockets",
     "rumps; sys_platform == 'darwin'",
+    "apscheduler>=3.10,<4",
+    "croniter>=1.3",
 ]
 
 [project.optional-dependencies]
