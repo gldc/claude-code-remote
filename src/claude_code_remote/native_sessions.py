@@ -12,6 +12,9 @@ from claude_code_remote.models import DashboardSessionSummary
 
 logger = logging.getLogger(__name__)
 
+# Directories whose sessions are hidden (temp/throwaway work)
+_HIDDEN_PROJECT_DIRS = {"/tmp", "/private/tmp"}
+
 # Model pricing: (input_per_1m, output_per_1m)
 MODEL_PRICING: dict[str, tuple[float, float]] = {
     "claude-opus-4-6": (15.0, 75.0),
@@ -203,9 +206,13 @@ class NativeSessionReader:
             self._session_paths.pop(stale_id, None)
 
     def list_sessions(self) -> list[DashboardSessionSummary]:
-        """List all native sessions with cached metadata."""
+        """List all native sessions with cached metadata, excluding temp dirs."""
         self._scan_sessions()
-        return [c.summary for c in self._cache.values()]
+        return [
+            c.summary
+            for c in self._cache.values()
+            if c.summary.project_dir not in _HIDDEN_PROJECT_DIRS
+        ]
 
     def get_session(self, session_id: str) -> DashboardSessionSummary | None:
         """Get metadata for a single session."""

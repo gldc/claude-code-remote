@@ -109,6 +109,9 @@ class SessionManager:
                 continue
             if archived is not None and s.archived != archived:
                 continue
+            # Hide sessions from temp directories
+            if s.project_dir in ("/tmp", "/private/tmp"):
+                continue
             results.append(self._to_summary(s))
         return results
 
