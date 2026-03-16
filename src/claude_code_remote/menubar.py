@@ -41,8 +41,11 @@ class CCRMenuBarApp(rumps.App):
 
         self.server_item = rumps.MenuItem(SERVER_ITEM_KEY)
         self.server_item.set_callback(None)
-        self.address_item = rumps.MenuItem(f"{self.display_host}:{port}")
-        self.address_item.set_callback(None)
+        self.address_url = f"http://{self.display_host}:{port}"
+        self.address_item = rumps.MenuItem(
+            f"{self.display_host}:{port}",
+            callback=self._copy_address,
+        )
         self.no_sessions_item = rumps.MenuItem("No sessions")
         self.no_sessions_item.set_callback(None)
 
@@ -118,6 +121,13 @@ class CCRMenuBarApp(rumps.App):
         no_sessions_key = "No sessions"
         if no_sessions_key in self.menu:
             del self.menu[no_sessions_key]
+
+    def _copy_address(self, _):
+        """Copy the server URL to clipboard."""
+        import subprocess
+
+        subprocess.run(["pbcopy"], input=self.address_url.encode(), check=False)
+        rumps.notification("CCR", "Copied to clipboard", self.address_url)
 
     def _quit(self, _):
         self.client.close()
