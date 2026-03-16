@@ -110,6 +110,7 @@ def create_app(
         workflow_engine=workflow_engine,
         project_store=project_store,
         cron_mgr=cron_mgr,
+        show_cost=config.get("show_cost", False),
     )
     app.include_router(api_router, prefix="/api")
 

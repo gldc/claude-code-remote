@@ -135,6 +135,7 @@ def create_router(
     workflow_engine=None,
     project_store: ProjectStore | None = None,
     cron_mgr=None,
+    show_cost: bool = False,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -588,6 +589,7 @@ def create_router(
             "status": "ok",
             "active_sessions": active,
             "total_sessions": len(sessions),
+            "show_cost": show_cost,
         }
 
     # --- Push ---
