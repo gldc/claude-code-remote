@@ -25,17 +25,27 @@ SERVER_ITEM_KEY = "Server: Checking..."
 class CCRMenuBarApp(rumps.App):
     def __init__(self, host: str, port: int):
         super().__init__(TITLE_DOWN, quit_button=None)
+        self.host = host
         self.port = port
         self.base_url = f"http://{host}:{port}"
         self.client = httpx.Client(timeout=3)
 
+        # Resolve MagicDNS name for display
+        from claude_code_remote import tailscale
+
+        dns_name = tailscale.get_dns_name()
+        self.display_host = dns_name or host
+
         self.server_item = rumps.MenuItem(SERVER_ITEM_KEY)
         self.server_item.set_callback(None)
+        self.address_item = rumps.MenuItem(f"{self.display_host}:{port}")
+        self.address_item.set_callback(None)
         self.no_sessions_item = rumps.MenuItem("No sessions")
         self.no_sessions_item.set_callback(None)
 
         self.menu = [
             self.server_item,
+            self.address_item,
             None,  # separator
             self.no_sessions_item,
             None,  # separator
