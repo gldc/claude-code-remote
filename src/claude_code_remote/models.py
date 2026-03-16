@@ -533,3 +533,16 @@ class CronJobWithRuns(CronJob):
     """CronJob with recent execution history inlined."""
 
     recent_runs: list[CronJobRun] = Field(default_factory=list)
+
+
+# --- Uploads ---
+
+
+class UploadedFile(BaseModel):
+    name: str
+    path: str
+    size: int
+
+
+class UploadResponse(BaseModel):
+    files: list[UploadedFile]

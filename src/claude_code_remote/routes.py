@@ -10,7 +10,7 @@ import shutil
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, UploadFile, File
 from starlette.responses import Response
 
 from claude_code_remote.models import (
@@ -36,6 +36,8 @@ from claude_code_remote.models import (
     WorkflowStepCreate,
     CronJobCreate,
     CronJobUpdate,
+    UploadedFile,
+    UploadResponse,
 )
 from starlette.requests import Request
 
@@ -45,6 +47,7 @@ from claude_code_remote.project_store import ProjectStore
 from claude_code_remote.projects import scan_directory, detect_project_type
 from claude_code_remote.push import PushManager
 from claude_code_remote.git_check import check_git_setup
+from claude_code_remote.uploads import save_upload, ensure_gitignore
 from claude_code_remote.git import git_status, git_diff, git_branches, git_log
 from claude_code_remote.mcp import (
     list_mcp_servers,
@@ -289,6 +292,42 @@ def create_router(
             raise HTTPException(status_code=404, detail="Session not found")
         await session_mgr.send_prompt(session_id, body.prompt)
         return {"ok": True}
+
+    @router.post("/sessions/{session_id}/upload")
+    async def upload_files(
+        session_id: str,
+        request: Request,
+        files: list[UploadFile] = File(...),
+    ):
+        """Upload files to the session's project directory."""
+        _check_session_access(session_id, request)
+        session = session_mgr.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if session.status.value == "completed":
+            raise HTTPException(
+                status_code=400, detail="Cannot upload to a completed session"
+            )
+        if not files:
+            raise HTTPException(status_code=400, detail="No files provided")
+
+        ensure_gitignore(session.project_dir)
+
+        # Note: reads entire file into memory. For v1 this is acceptable since
+        # the user controls what they upload. If OOM becomes an issue with very
+        # large files, refactor to stream chunks via aiofiles.
+        uploaded = []
+        for f in files:
+            content = await f.read()
+            try:
+                result = save_upload(
+                    session.project_dir, f.filename or "unnamed", content
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            uploaded.append(UploadedFile(**result))
+
+        return UploadResponse(files=uploaded)
 
     @router.post("/sessions/{session_id}/approve")
     async def approve_tool(session_id: str, request: Request):
