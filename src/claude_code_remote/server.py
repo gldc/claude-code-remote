@@ -9,6 +9,8 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from claude_code_remote.auth import TailscaleAuthMiddleware
 from claude_code_remote.config import (
@@ -132,6 +134,20 @@ def create_app(
 
     dashboard_router = create_dashboard_router(session_mgr, native_reader, cron_mgr)
     app.include_router(dashboard_router, prefix="/api/dashboard")
+
+    # Dashboard SPA static files
+    dashboard_dist = Path(__file__).parent / "dashboard" / "dist"
+    if dashboard_dist.exists():
+        app.mount(
+            "/dashboard/assets",
+            StaticFiles(directory=dashboard_dist / "assets"),
+            name="dashboard-assets",
+        )
+
+        @app.get("/dashboard/{path:path}")
+        @app.get("/dashboard")
+        async def dashboard_spa(path: str = ""):
+            return FileResponse(dashboard_dist / "index.html")
 
     # Stash references for CLI access
     app.state.session_mgr = session_mgr
