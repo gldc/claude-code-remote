@@ -49,6 +49,11 @@ ccr start --no-auth     # Local dev mode (127.0.0.1, no Tailscale auth)
 - **Approval hook:** The PreToolUse hook (`ccr_approval.py`) auto-approves safe read-only tools (Read, Glob, Grep, etc.) and routes dangerous tools (Write, Edit, Bash) to the mobile app for approval. When `skip_permissions` is enabled, all tools are auto-approved.
 - **SSH for unattended git:** If the server host uses 1Password SSH agent, git operations in Claude Code sessions will hang waiting for interactive approval. A dedicated local SSH key (`~/.ssh/id_ed25519_local`) with `IdentityAgent none` for `Host github.com` in `~/.ssh/config` bypasses this. See the README for setup.
 - **Statusline forwarding:** If `~/.claude/statusline-command.sh` detects `CCR_SESSION_ID` and `CCR_API_URL` env vars, it POSTs model name, context %, and git branch to the server. The server also extracts this data directly from stream-json events (assistant event `message.model`, result event `modelUsage`).
+- **Cron jobs:** APScheduler-based cron scheduling with SPAWN (new session per run) and PERSISTENT (reuse session) modes. Jobs persist to `~/.local/state/claude-code-remote/cron/`, history to `cron_history.jsonl`. Prompts support template variables (`{{date}}`, `{{branch}}`, etc.).
+- **Dashboard:** A React SPA at `/dashboard/` shows unified CCR + native Claude Code sessions, analytics, and cron management. Native sessions are discovered from `~/.claude/projects/` and `~/.claude/sessions/` with model-specific cost estimation.
+- **File uploads:** `POST /api/sessions/{id}/upload` saves files to `claude-uploads/` in the project root with filename sanitization and automatic `.gitignore` management.
+- **Orphan process cleanup:** `ccr stop` and `ccr start` detect orphaned server processes via `lsof` and offer SIGTERM → SIGKILL escalation.
+- **Menubar:** Shows MagicDNS hostname, live session list with status badges (● running, ◉ awaiting approval, ○ down), and an "Open Dashboard" button.
 
 ## CLI Commands
 
@@ -85,6 +90,11 @@ ccr start --no-auth     # Local dev mode (127.0.0.1, no Tailscale auth)
 | `src/claude_code_remote/mcp.py` | MCP server discovery and health checks |
 | `src/claude_code_remote/usage.py` | Claude API usage tracking and rate limit parsing |
 | `src/claude_code_remote/workflows.py` | Workflow engine -- multi-step session orchestration with DAG execution |
+| `src/claude_code_remote/cron_manager.py` | Cron job scheduling with APScheduler, persistence, template substitution |
+| `src/claude_code_remote/dashboard.py` | Dashboard API routes -- unified session views, analytics, cron management |
+| `src/claude_code_remote/native_sessions.py` | Native Claude Code session discovery from `~/.claude/` with cost estimation |
+| `src/claude_code_remote/uploads.py` | File upload utilities -- sanitization, storage, gitignore management |
+| `src/claude_code_remote/dashboard/` | React + TypeScript + Vite dashboard SPA (session list, detail, cron views) |
 | `src/claude_code_remote/hooks/ccr_approval.py` | PreToolUse hook script for tool approval routing |
 | `pyproject.toml` | Package configuration |
 
@@ -128,6 +138,17 @@ ccr start --no-auth     # Local dev mode (127.0.0.1, no Tailscale auth)
 - `GET/DELETE /api/workflows/{id}` -- Get/delete workflow
 - `POST /api/workflows/{id}/run` -- Run a workflow
 - `POST /api/workflows/{id}/steps` -- Add step to workflow
+- `POST /api/sessions/{id}/upload` -- Upload file attachments to a session
+- `GET/POST /api/cron-jobs` -- List/create cron jobs
+- `GET/PATCH/DELETE /api/cron-jobs/{id}` -- Get/update/delete cron job
+- `POST /api/cron-jobs/{id}/toggle` -- Enable/disable cron job
+- `POST /api/cron-jobs/{id}/trigger` -- Manually trigger cron job
+- `GET /api/cron-jobs/{id}/history` -- Cron job run history
+- `GET /api/dashboard/sessions` -- Unified CCR + native session list (paginated, searchable)
+- `GET /api/dashboard/sessions/{id}` -- Full session detail with paginated messages
+- `POST /api/dashboard/sessions/{id}/resume` -- Resume native session as new CCR session
+- `GET /api/dashboard/analytics` -- Dashboard summary stats
+- `GET /api/dashboard/cron-jobs` -- Cron jobs with recent run history
 - `POST /api/internal/approval-request` -- Hook: request tool approval (blocks until user decides)
 - `POST /api/internal/statusline` -- Hook: receive statusline data (model, context %, git branch)
 - `WS /ws/sessions/{id}` -- Live session stream

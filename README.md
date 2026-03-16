@@ -75,11 +75,13 @@ Install the companion Expo app on your phone and point it at your server's Tails
 | `ccr start -d` | Start in background (daemon mode) |
 | `ccr start --no-auth` | Start without Tailscale auth (local dev) |
 | `ccr start --menubar` | Start with macOS menubar status indicator |
-| `ccr stop` | Stop the API server |
+| `ccr stop` | Stop the API server (detects orphaned processes) |
 | `ccr status` | Show server and Tailscale status |
 | `ccr doctor` | Check all prerequisites |
 | `ccr install` | Install the CCR approval hook into Claude Code |
 | `ccr uninstall` | Remove the CCR approval hook |
+
+The `ccr stop` and `ccr start` commands include orphan process detection -- if a previous server crashed without cleaning up, they will detect the process holding the port via `lsof` and offer to kill it (SIGTERM, then SIGKILL after 2s).
 
 ## API Endpoints
 
@@ -122,10 +124,72 @@ Install the companion Expo app on your phone and point it at your server's Tails
 | `/api/workflows/{id}` | GET, DELETE | Get or delete a workflow |
 | `/api/workflows/{id}/run` | POST | Run a workflow |
 | `/api/workflows/{id}/steps` | POST | Add step to a workflow |
+| `/api/sessions/{id}/upload` | POST | Upload file attachments to a session |
+| `/api/cron-jobs` | GET, POST | List or create cron jobs |
+| `/api/cron-jobs/{id}` | GET, PATCH, DELETE | Get, update, or delete a cron job |
+| `/api/cron-jobs/{id}/toggle` | POST | Enable or disable a cron job |
+| `/api/cron-jobs/{id}/trigger` | POST | Manually trigger a cron job |
+| `/api/cron-jobs/{id}/history` | GET | Get cron job run history |
+| `/api/dashboard/sessions` | GET | Unified CCR + native session list (paginated) |
+| `/api/dashboard/sessions/{id}` | GET | Full session detail with paginated messages |
+| `/api/dashboard/sessions/{id}/resume` | POST | Resume a native session as a new CCR session |
+| `/api/dashboard/analytics` | GET | Dashboard summary stats |
+| `/api/dashboard/cron-jobs` | GET | Cron jobs with recent run history |
 | `/api/internal/approval-request` | POST | Hook: request tool approval |
 | `/api/internal/statusline` | POST | Hook: receive statusline data |
 | `/ws/sessions/{id}` | WS | Live session event stream |
 | `/ws/terminal/{project_id}` | WS | Interactive PTY terminal |
+
+## Dashboard
+
+A built-in web dashboard at `/dashboard/` provides a unified view of all sessions -- both CCR-managed and native Claude Code sessions found in `~/.claude/`.
+
+- **Session list** with sorting, filtering, and search across both CCR and native sessions
+- **Session detail** with a visual message timeline
+- **Analytics bar** showing active sessions, 7-day costs, top model, and active cron jobs
+- **Cron job management** with table view, create/edit forms, and run history
+- **Resume native sessions** -- pick up a native Claude Code session as a new CCR session
+
+The dashboard reads native Claude Code sessions from `~/.claude/projects/` and `~/.claude/sessions/`, estimating costs using model-specific token pricing.
+
+Access it at `http://<tailscale-ip>:8080/dashboard/` or via the "Open Dashboard" button in the menubar.
+
+## Cron Jobs
+
+Schedule recurring Claude Code sessions with cron expressions:
+
+```bash
+# Via API
+curl -X POST http://<server>/api/cron-jobs \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Daily report", "schedule": "0 9 * * *", "prompt": "Generate the daily status report for {{date}}", "project_directory": "~/Developer/my-project"}'
+```
+
+**Execution modes:**
+- **SPAWN** -- creates a new session for each run
+- **PERSISTENT** -- reuses a single session across runs
+
+**Template variables** available in prompts:
+- `{{date}}`, `{{time}}`, `{{datetime}}` -- current date/time
+- `{{project}}` -- project directory name
+- `{{run_number}}` -- incremental run counter
+- `{{branch}}` -- current git branch
+
+Jobs are persisted to `~/.local/state/claude-code-remote/cron/` and run history is logged to `cron_history.jsonl`. Concurrent runs of the same job are automatically skipped.
+
+## File Uploads
+
+Upload files from the mobile app to a session's project directory:
+
+```bash
+curl -X POST http://<server>/api/sessions/{id}/upload \
+  -F "files=@screenshot.png"
+```
+
+- Files are saved to `claude-uploads/` in the project root
+- Filenames are sanitized (directory traversal, unsafe characters, hidden files)
+- `claude-uploads/` is automatically added to `.gitignore`
+- Uploads are rejected for completed sessions
 
 ## Tool Approval
 
@@ -148,6 +212,16 @@ Each session tracks real-time metadata extracted from Claude Code's stream-json 
 - **Context %** -- estimated context window usage from token counts
 - **Git branch** -- current branch of the project directory
 - **Cost** -- cumulative API cost in USD
+
+## Menubar
+
+When started with `--menubar`, the server shows a macOS menubar indicator:
+
+- **`● CCR`** -- server running, no attention needed
+- **`◉ CCR`** -- session awaiting tool approval
+- **`○ CCR`** -- server not responding
+
+The menu displays the Tailscale MagicDNS hostname, a live session list with status badges, and quick links to the dashboard. Click the address to copy the server URL.
 
 ## Security
 
