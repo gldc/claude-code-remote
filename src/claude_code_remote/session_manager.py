@@ -89,6 +89,7 @@ class SessionManager:
             current_model=s.current_model,
             context_percent=s.context_percent,
             git_branch=s.git_branch,
+            message_count=len(s.messages),
             last_message_preview=preview,
             archived=s.archived,
             cron_job_id=s.cron_job_id,
@@ -107,6 +108,9 @@ class SessionManager:
             if project_dir and s.project_dir != project_dir:
                 continue
             if archived is not None and s.archived != archived:
+                continue
+            # Hide sessions from temp directories
+            if s.project_dir in ("/tmp", "/private/tmp"):
                 continue
             results.append(self._to_summary(s))
         return results

@@ -9,6 +9,8 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from claude_code_remote.auth import TailscaleAuthMiddleware
 from claude_code_remote.config import (
@@ -36,6 +38,8 @@ from claude_code_remote.projects import scan_directory
 from claude_code_remote.routes import create_router
 from claude_code_remote.websocket import create_ws_router
 from claude_code_remote.terminal import TerminalManager, create_terminal_router
+from claude_code_remote.native_sessions import NativeSessionReader
+from claude_code_remote.dashboard import create_dashboard_router
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +72,7 @@ def create_app(
         session_mgr=session_mgr,
     )
     terminal_mgr = TerminalManager()
+    native_reader = NativeSessionReader()
     scan_dirs = config.get("scan_directories", ["~/Developer"])
 
     @asynccontextmanager
@@ -105,6 +110,7 @@ def create_app(
         workflow_engine=workflow_engine,
         project_store=project_store,
         cron_mgr=cron_mgr,
+        show_cost=config.get("show_cost", False),
     )
     app.include_router(api_router, prefix="/api")
 
@@ -126,6 +132,25 @@ def create_app(
         terminal_mgr, resolve_project, skip_auth=skip_auth
     )
     app.include_router(terminal_router)
+
+    dashboard_router = create_dashboard_router(
+        session_mgr, native_reader, cron_mgr, show_cost=config.get("show_cost", False)
+    )
+    app.include_router(dashboard_router, prefix="/api/dashboard")
+
+    # Dashboard SPA static files
+    dashboard_dist = Path(__file__).parent / "dashboard" / "dist"
+    if dashboard_dist.exists():
+        app.mount(
+            "/dashboard/assets",
+            StaticFiles(directory=dashboard_dist / "assets"),
+            name="dashboard-assets",
+        )
+
+        @app.get("/dashboard/{path:path}")
+        @app.get("/dashboard")
+        async def dashboard_spa(path: str = ""):
+            return FileResponse(dashboard_dist / "index.html")
 
     # Stash references for CLI access
     app.state.session_mgr = session_mgr

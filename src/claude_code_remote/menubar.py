@@ -25,17 +25,37 @@ SERVER_ITEM_KEY = "Server: Checking..."
 class CCRMenuBarApp(rumps.App):
     def __init__(self, host: str, port: int):
         super().__init__(TITLE_DOWN, quit_button=None)
+        self.host = host
         self.port = port
         self.base_url = f"http://{host}:{port}"
         self.client = httpx.Client(timeout=3)
 
+        # Resolve MagicDNS name for display (only if bound to Tailscale)
+        if host in ("127.0.0.1", "localhost"):
+            self.display_host = host
+        else:
+            from claude_code_remote import tailscale
+
+            dns_name = tailscale.get_dns_name()
+            self.display_host = dns_name or host
+
         self.server_item = rumps.MenuItem(SERVER_ITEM_KEY)
         self.server_item.set_callback(None)
+        self.address_url = f"http://{self.display_host}:{port}"
+        self.address_item = rumps.MenuItem(
+            f"{self.display_host}:{port}",
+            callback=self._copy_address,
+        )
+        self.dashboard_item = rumps.MenuItem(
+            "Open Dashboard", callback=self._open_dashboard
+        )
         self.no_sessions_item = rumps.MenuItem("No sessions")
         self.no_sessions_item.set_callback(None)
 
         self.menu = [
             self.server_item,
+            self.address_item,
+            self.dashboard_item,
             None,  # separator
             self.no_sessions_item,
             None,  # separator
@@ -105,6 +125,19 @@ class CCRMenuBarApp(rumps.App):
         no_sessions_key = "No sessions"
         if no_sessions_key in self.menu:
             del self.menu[no_sessions_key]
+
+    def _open_dashboard(self, _):
+        """Open the dashboard in the default browser."""
+        import webbrowser
+
+        webbrowser.open(f"{self.address_url}/dashboard/")
+
+    def _copy_address(self, _):
+        """Copy the server URL to clipboard."""
+        import subprocess
+
+        subprocess.run(["pbcopy"], input=self.address_url.encode(), check=False)
+        rumps.notification("CCR", "Copied to clipboard", self.address_url)
 
     def _quit(self, _):
         self.client.close()
