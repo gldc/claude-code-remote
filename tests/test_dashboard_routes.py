@@ -155,6 +155,66 @@ def test_analytics(client):
     assert "active_cron_jobs" in data
 
 
+def test_resume_native_session(tmp_path, session_mgr, native_reader, cron_mgr):
+    """Test resuming a native session creates a CCR session with --resume."""
+    # Create a native session with a real project_dir (tmp_path exists)
+    d = tmp_path / "resume_claude"
+    projects = d / "projects" / "-tmp-resumetest"
+    projects.mkdir(parents=True)
+    sessions = d / "sessions"
+    sessions.mkdir()
+    project_dir = tmp_path / "resumetest"
+    project_dir.mkdir()
+
+    session_id = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+    jsonl = projects / f"{session_id}.jsonl"
+    import json
+
+    with open(jsonl, "w") as f:
+        f.write(
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "test"},
+                    "uuid": "u1",
+                    "timestamp": "2026-03-15T10:00:00.000Z",
+                    "sessionId": session_id,
+                    "cwd": str(project_dir),
+                }
+            )
+            + "\n"
+        )
+
+    reader = NativeSessionReader(d)
+    app = FastAPI()
+    router = create_dashboard_router(session_mgr, reader, cron_mgr)
+    app.include_router(router, prefix="/api/dashboard")
+    client = TestClient(app)
+
+    resp = client.post(
+        f"/api/dashboard/sessions/{session_id}/resume",
+        json={"prompt": "Continue working"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "session_id" in data
+    assert data["status"] == "created"
+
+    # Verify the CCR session was created with the right claude_session_id
+    ccr_session = session_mgr.get_session(data["session_id"])
+    assert ccr_session is not None
+    assert ccr_session.claude_session_id == session_id
+    assert "resumed" in ccr_session.name
+
+
+def test_resume_nonexistent_session(client):
+    resp = client.post(
+        "/api/dashboard/sessions/nonexistent/resume",
+        json={"prompt": "test"},
+    )
+    assert resp.status_code == 404
+
+
 def test_cron_jobs_enriched(client, cron_mgr):
     # Create a cron job
     job = cron_mgr.create(

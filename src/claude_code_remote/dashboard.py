@@ -45,6 +45,7 @@ def create_dashboard_router(
             current_model=summary.current_model,
             total_cost_usd=summary.total_cost_usd,
             cost_is_estimated=False,
+            message_count=summary.message_count,
             context_percent=summary.context_percent,
             git_branch=summary.git_branch,
             created_at=summary.created_at,

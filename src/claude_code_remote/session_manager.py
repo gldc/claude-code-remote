@@ -89,6 +89,7 @@ class SessionManager:
             current_model=s.current_model,
             context_percent=s.context_percent,
             git_branch=s.git_branch,
+            message_count=len(s.messages),
             last_message_preview=preview,
             archived=s.archived,
             cron_job_id=s.cron_job_id,

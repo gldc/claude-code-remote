@@ -7,7 +7,7 @@ import shutil
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pathlib import Path
 
@@ -122,6 +122,7 @@ class SessionSummary(BaseModel):
     current_model: str | None = None
     context_percent: int = 0
     git_branch: str | None = None
+    message_count: int = 0
     last_message_preview: str | None = None
     archived: bool = False
     cron_job_id: str | None = None
@@ -494,7 +495,7 @@ class DashboardSessionSummary(BaseModel):
     id: str
     name: str
     project_dir: str
-    source: str  # "ccr" or "native"
+    source: Literal["ccr", "native"]
     status: str
     current_model: str | None = None
     total_cost_usd: float = 0.0

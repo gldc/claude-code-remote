@@ -80,8 +80,8 @@ class NativeSessionReader:
                         session_id = event.get("sessionId")
                     if project_dir is None:
                         project_dir = event.get("cwd")
-                    if git_branch is None:
-                        git_branch = event.get("gitBranch")
+                    if event.get("gitBranch"):
+                        git_branch = event["gitBranch"]
                     if ts:
                         if first_ts is None:
                             first_ts = ts
