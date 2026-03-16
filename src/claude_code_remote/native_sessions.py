@@ -23,11 +23,26 @@ MODEL_PRICING: dict[str, tuple[float, float]] = {
 }
 DEFAULT_PRICING = MODEL_PRICING["claude-sonnet-4-6"]
 
+# Cache token pricing relative to base input price
+CACHE_READ_MULTIPLIER = 0.1  # 90% discount
+CACHE_CREATION_MULTIPLIER = 1.25  # 25% surcharge
 
-def _estimate_cost(model: str | None, input_tokens: int, output_tokens: int) -> float:
+
+def _estimate_cost(
+    model: str | None,
+    input_tokens: int,
+    cache_read_tokens: int,
+    cache_creation_tokens: int,
+    output_tokens: int,
+) -> float:
     """Estimate cost from token counts using model-specific pricing."""
-    pricing = MODEL_PRICING.get(model or "", DEFAULT_PRICING)
-    return (input_tokens * pricing[0] + output_tokens * pricing[1]) / 1_000_000
+    input_price, output_price = MODEL_PRICING.get(model or "", DEFAULT_PRICING)
+    return (
+        input_tokens * input_price
+        + cache_read_tokens * input_price * CACHE_READ_MULTIPLIER
+        + cache_creation_tokens * input_price * CACHE_CREATION_MULTIPLIER
+        + output_tokens * output_price
+    ) / 1_000_000
 
 
 class _CachedMetadata:
@@ -60,6 +75,8 @@ class NativeSessionReader:
         git_branch: str | None = None
         model: str | None = None
         total_input = 0
+        total_cache_read = 0
+        total_cache_creation = 0
         total_output = 0
         message_count = 0
         first_ts: str | None = None
@@ -99,8 +116,10 @@ class NativeSessionReader:
                             model = msg["model"]
                         usage = msg.get("usage", {})
                         total_input += usage.get("input_tokens", 0)
-                        total_input += usage.get("cache_read_input_tokens", 0)
-                        total_input += usage.get("cache_creation_input_tokens", 0)
+                        total_cache_read += usage.get("cache_read_input_tokens", 0)
+                        total_cache_creation += usage.get(
+                            "cache_creation_input_tokens", 0
+                        )
                         total_output += usage.get("output_tokens", 0)
         except OSError:
             return None
@@ -108,7 +127,9 @@ class NativeSessionReader:
         if session_id is None:
             return None
 
-        cost = _estimate_cost(model, total_input, total_output)
+        cost = _estimate_cost(
+            model, total_input, total_cache_read, total_cache_creation, total_output
+        )
 
         # Determine status from pre-loaded active sessions lookup
         status = (
