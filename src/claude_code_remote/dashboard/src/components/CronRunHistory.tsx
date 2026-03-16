@@ -1,5 +1,6 @@
 import { Link } from "react-router";
 import type { CronJobRun } from "../types";
+import { useConfig } from "../config";
 
 function StatusBadge({ status }: { status: string }) {
   const cls: Record<string, string> = {
@@ -16,6 +17,8 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export default function CronRunHistory({ runs }: { runs: CronJobRun[] }) {
+  const { showCost } = useConfig();
+
   if (!runs.length) {
     return <p className="text-zinc-500 text-sm py-4">No run history</p>;
   }
@@ -28,7 +31,7 @@ export default function CronRunHistory({ runs }: { runs: CronJobRun[] }) {
             <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase">Status</th>
             <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase">Started</th>
             <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase">Completed</th>
-            <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase">Cost</th>
+            {showCost && <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase">Cost</th>}
             <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase">Session</th>
             <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 uppercase">Error</th>
           </tr>
@@ -39,7 +42,7 @@ export default function CronRunHistory({ runs }: { runs: CronJobRun[] }) {
               <td className="px-4 py-3"><StatusBadge status={run.status} /></td>
               <td className="px-4 py-3 text-zinc-400 text-xs">{new Date(run.started_at).toLocaleString()}</td>
               <td className="px-4 py-3 text-zinc-400 text-xs">{run.completed_at ? new Date(run.completed_at).toLocaleString() : "—"}</td>
-              <td className="px-4 py-3 text-zinc-300 tabular-nums">${run.cost_usd.toFixed(2)}</td>
+              {showCost && <td className="px-4 py-3 text-zinc-300 tabular-nums">${run.cost_usd.toFixed(2)}</td>}
               <td className="px-4 py-3">
                 {run.session_id ? (
                   <Link to={`/sessions/${run.session_id}`} className="text-xs text-sky-400 hover:text-sky-300 font-mono">{run.session_id.slice(0, 8)}</Link>
