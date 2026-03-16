@@ -30,11 +30,14 @@ class CCRMenuBarApp(rumps.App):
         self.base_url = f"http://{host}:{port}"
         self.client = httpx.Client(timeout=3)
 
-        # Resolve MagicDNS name for display
-        from claude_code_remote import tailscale
+        # Resolve MagicDNS name for display (only if bound to Tailscale)
+        if host in ("127.0.0.1", "localhost"):
+            self.display_host = host
+        else:
+            from claude_code_remote import tailscale
 
-        dns_name = tailscale.get_dns_name()
-        self.display_host = dns_name or host
+            dns_name = tailscale.get_dns_name()
+            self.display_host = dns_name or host
 
         self.server_item = rumps.MenuItem(SERVER_ITEM_KEY)
         self.server_item.set_callback(None)
