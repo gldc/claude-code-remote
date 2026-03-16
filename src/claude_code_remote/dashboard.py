@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from claude_code_remote.cron_manager import CronManager
 from claude_code_remote.models import (
@@ -28,6 +28,20 @@ def create_dashboard_router(
     cron_mgr: CronManager | None = None,
 ) -> APIRouter:
     router = APIRouter()
+
+    def _get_caller_identity(request: Request) -> str | None:
+        """Extract the Tailscale identity stashed by auth middleware."""
+        return getattr(request.state, "tailscale_identity", None)
+
+    def _can_access_session(session, identity: str | None) -> bool:
+        """Check if the caller can access a CCR session."""
+        if identity is None:
+            return True  # Auth disabled (--no-auth)
+        if not session.owner or session.owner == identity:
+            return True
+        if hasattr(session, "collaborators") and identity in session.collaborators:
+            return True
+        return False
 
     def _ccr_summary_to_dashboard(summary) -> DashboardSessionSummary:
         """Convert a CCR SessionSummary to DashboardSessionSummary.
@@ -77,7 +91,8 @@ def create_dashboard_router(
         )
 
     @router.get("/sessions")
-    def list_sessions(
+    async def list_sessions(
+        request: Request,
         source: str | None = None,
         status: str | None = None,
         project: str | None = None,
@@ -86,9 +101,10 @@ def create_dashboard_router(
         page_size: int = Query(50, ge=1, le=200),
     ):
         """List sessions from both CCR and native sources."""
+        identity = _get_caller_identity(request)
         all_sessions: list[DashboardSessionSummary] = []
 
-        # CCR sessions
+        # CCR sessions (filtered by caller identity)
         if source is None or source == "ccr":
             if q:
                 # search_sessions returns list[dict] with session_id keys
@@ -98,14 +114,17 @@ def create_dashboard_router(
                     if sid not in seen_ids:
                         seen_ids.add(sid)
                         s = session_mgr.get_session(sid)
-                        if s:
+                        if s and _can_access_session(s, identity):
                             all_sessions.append(_ccr_session_to_dashboard(s))
             else:
                 # list_sessions returns list[SessionSummary] (no messages)
                 for s in session_mgr.list_sessions():
-                    all_sessions.append(_ccr_summary_to_dashboard(s))
+                    # Need full session for owner check
+                    full = session_mgr.get_session(s.id)
+                    if full and _can_access_session(full, identity):
+                        all_sessions.append(_ccr_summary_to_dashboard(s))
 
-        # Native sessions
+        # Native sessions (visible to all authenticated users)
         if source is None or source == "native":
             native = native_reader.list_sessions()
             if q:
@@ -142,15 +161,23 @@ def create_dashboard_router(
         }
 
     @router.get("/sessions/{session_id}")
-    def get_session(
+    async def get_session(
+        request: Request,
         session_id: str,
         offset: int = Query(0, ge=0),
         limit: int = Query(100, ge=1, le=500),
     ):
         """Get session detail with paginated messages."""
+        identity = _get_caller_identity(request)
+
         # Try CCR first
         ccr_session = session_mgr.get_session(session_id)
         if ccr_session:
+            if not _can_access_session(ccr_session, identity):
+                raise HTTPException(
+                    status_code=403,
+                    detail="You do not have access to this session.",
+                )
             messages = ccr_session.messages
             total = len(messages)
             return DashboardSession(
@@ -159,7 +186,7 @@ def create_dashboard_router(
                 total_messages=total,
             ).model_dump()
 
-        # Try native
+        # Try native (visible to all authenticated users)
         native_summary = native_reader.get_session(session_id)
         if native_summary:
             messages, total = native_reader.get_session_messages(
@@ -174,32 +201,32 @@ def create_dashboard_router(
         raise HTTPException(status_code=404, detail="Session not found")
 
     @router.get("/analytics")
-    def get_analytics():
+    async def get_analytics(request: Request):
         """Summary stats for the dashboard header."""
+        identity = _get_caller_identity(request)
         now = datetime.now(timezone.utc)
         seven_days_ago = now - timedelta(days=7)
 
-        # CCR sessions (list_sessions returns SessionSummary objects)
+        # CCR sessions (filtered by identity)
         ccr_sessions = session_mgr.list_sessions()
-        active_ccr = sum(
-            1
-            for s in ccr_sessions
-            if s.status.value in ("running", "idle", "awaiting_approval")
-        )
-
-        # Native sessions
-        native_sessions = native_reader.list_sessions()
-        active_native = sum(1 for s in native_sessions if s.status == "active")
-
-        # Cost (last 7 days)
+        active_ccr = 0
         cost_7d = 0.0
         model_counts: dict[str, int] = {}
 
         for s in ccr_sessions:
+            full = session_mgr.get_session(s.id)
+            if full and not _can_access_session(full, identity):
+                continue
+            if s.status.value in ("running", "idle", "awaiting_approval"):
+                active_ccr += 1
             if s.updated_at >= seven_days_ago:
                 cost_7d += s.total_cost_usd
             if s.current_model:
                 model_counts[s.current_model] = model_counts.get(s.current_model, 0) + 1
+
+        # Native sessions
+        native_sessions = native_reader.list_sessions()
+        active_native = sum(1 for s in native_sessions if s.status == "active")
 
         for s in native_sessions:
             if s.updated_at >= seven_days_ago:
@@ -222,11 +249,15 @@ def create_dashboard_router(
         ).model_dump()
 
     @router.post("/sessions/{session_id}/resume")
-    def resume_native_session(session_id: str, req: DashboardResumeRequest):
+    async def resume_native_session(
+        session_id: str, req: DashboardResumeRequest, request: Request
+    ):
         """Resume a native session by creating a CCR session with --resume."""
         native_summary = native_reader.get_session(session_id)
         if not native_summary:
             raise HTTPException(status_code=404, detail="Native session not found")
+
+        identity = _get_caller_identity(request)
 
         # Create a CCR session pointing to the native session
         ccr_session = session_mgr.create_session(
@@ -234,16 +265,20 @@ def create_dashboard_router(
                 name=f"{native_summary.name} (resumed)",
                 project_dir=native_summary.project_dir,
                 initial_prompt=req.prompt,
-            )
+            ),
+            owner=identity,
         )
         # Set the claude_session_id so --resume picks up the conversation
         ccr_session.claude_session_id = native_summary.claude_session_id
         session_mgr.persist_session(ccr_session.id)
 
+        # Actually send the prompt to start the session
+        await session_mgr.send_prompt(ccr_session.id, req.prompt)
+
         return {"session_id": ccr_session.id, "status": "created"}
 
     @router.get("/cron-jobs")
-    def list_cron_jobs_enriched():
+    async def list_cron_jobs_enriched():
         """List all cron jobs with recent runs inlined."""
         if not cron_mgr:
             return []

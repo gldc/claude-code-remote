@@ -107,8 +107,12 @@ class NativeSessionReader:
 
         cost = _estimate_cost(model, total_input, total_output)
 
-        # Determine status by checking if a live process owns this session
-        status = self._check_active_status(session_id)
+        # Determine status from pre-loaded active sessions lookup
+        status = (
+            "active"
+            if session_id in getattr(self, "_active_sessions", {})
+            else "completed"
+        )
 
         now = datetime.now(timezone.utc)
         created = (
@@ -137,29 +141,33 @@ class NativeSessionReader:
             claude_session_id=session_id,
         )
 
-    def _check_active_status(self, session_id: str) -> str:
-        """Check if a native session has an active process."""
+    def _load_active_sessions(self) -> dict[str, int]:
+        """Load all active session files once into a sessionId -> pid lookup."""
+        active: dict[str, int] = {}
         if not self._sessions_dir.exists():
-            return "completed"
+            return active
         for sf in self._sessions_dir.glob("*.json"):
             try:
                 data = json.loads(sf.read_text())
-                if data.get("sessionId") == session_id:
-                    pid = data.get("pid")
-                    if pid:
-                        try:
-                            os.kill(pid, 0)
-                            return "active"
-                        except (ProcessLookupError, PermissionError):
-                            pass
+                sid = data.get("sessionId")
+                pid = data.get("pid")
+                if sid and pid:
+                    try:
+                        os.kill(pid, 0)
+                        active[sid] = pid
+                    except (ProcessLookupError, PermissionError):
+                        pass
             except (json.JSONDecodeError, OSError):
                 continue
-        return "completed"
+        return active
 
     def _scan_sessions(self) -> None:
         """Scan projects directory and update cache."""
         if not self._projects_dir.exists():
             return
+
+        # Load active session pids once for the entire scan
+        self._active_sessions = self._load_active_sessions()
 
         seen: set[str] = set()
         for project_dir in self._projects_dir.iterdir():
