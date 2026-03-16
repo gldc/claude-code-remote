@@ -483,3 +483,51 @@ class CronJobRun(BaseModel):
     completed_at: datetime | None = None
     cost_usd: float = 0.0
     error_message: str | None = None
+
+
+# --- Dashboard ---
+
+
+class DashboardSessionSummary(BaseModel):
+    """Lightweight session summary for list views, unifying CCR and native sessions."""
+
+    id: str
+    name: str
+    project_dir: str
+    source: str  # "ccr" or "native"
+    status: str
+    current_model: str | None = None
+    total_cost_usd: float = 0.0
+    cost_is_estimated: bool = False
+    message_count: int = 0
+    context_percent: int | None = None
+    git_branch: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    owner: str | None = None
+    claude_session_id: str | None = None
+    cron_job_id: str | None = None
+
+
+class DashboardSession(DashboardSessionSummary):
+    """Full session detail with messages."""
+
+    messages: list[dict] = Field(default_factory=list)
+    total_messages: int = 0  # Total count for pagination
+
+
+class DashboardResumeRequest(BaseModel):
+    prompt: str
+
+
+class DashboardAnalytics(BaseModel):
+    active_sessions: int = 0
+    total_cost_7d: float = 0.0
+    top_model: str | None = None
+    active_cron_jobs: int = 0
+
+
+class CronJobWithRuns(CronJob):
+    """CronJob with recent execution history inlined."""
+
+    recent_runs: list[CronJobRun] = Field(default_factory=list)
