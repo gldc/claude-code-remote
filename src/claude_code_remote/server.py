@@ -36,6 +36,8 @@ from claude_code_remote.projects import scan_directory
 from claude_code_remote.routes import create_router
 from claude_code_remote.websocket import create_ws_router
 from claude_code_remote.terminal import TerminalManager, create_terminal_router
+from claude_code_remote.native_sessions import NativeSessionReader
+from claude_code_remote.dashboard import create_dashboard_router
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +70,7 @@ def create_app(
         session_mgr=session_mgr,
     )
     terminal_mgr = TerminalManager()
+    native_reader = NativeSessionReader()
     scan_dirs = config.get("scan_directories", ["~/Developer"])
 
     @asynccontextmanager
@@ -126,6 +129,9 @@ def create_app(
         terminal_mgr, resolve_project, skip_auth=skip_auth
     )
     app.include_router(terminal_router)
+
+    dashboard_router = create_dashboard_router(session_mgr, native_reader, cron_mgr)
+    app.include_router(dashboard_router, prefix="/api/dashboard")
 
     # Stash references for CLI access
     app.state.session_mgr = session_mgr
