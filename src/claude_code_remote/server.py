@@ -132,7 +132,9 @@ def create_app(
     )
     app.include_router(terminal_router)
 
-    dashboard_router = create_dashboard_router(session_mgr, native_reader, cron_mgr)
+    dashboard_router = create_dashboard_router(
+        session_mgr, native_reader, cron_mgr, show_cost=config.get("show_cost", False)
+    )
     app.include_router(dashboard_router, prefix="/api/dashboard")
 
     # Dashboard SPA static files

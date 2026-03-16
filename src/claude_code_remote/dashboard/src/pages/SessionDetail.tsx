@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router";
 import type { DashboardSession } from "../types";
 import { getSession } from "../api";
+import { useConfig } from "../config";
 import MessageTimeline from "../components/MessageTimeline";
 import ResumeActions from "../components/ResumeActions";
 
 export default function SessionDetail() {
   const { id } = useParams<{ id: string }>();
+  const { showCost } = useConfig();
   const [session, setSession] = useState<DashboardSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -78,16 +80,18 @@ export default function SessionDetail() {
             <p className="text-zinc-500">Model</p>
             <p className="text-zinc-200">{session.current_model ?? "—"}</p>
           </div>
-          <div>
-            <p className="text-zinc-500">Cost</p>
-            <p className="text-zinc-200">
-              {session.cost_is_estimated && "~"}$
-              {session.total_cost_usd.toFixed(2)}
-              {session.cost_is_estimated && (
-                <span className="text-zinc-600 ml-1">(est.)</span>
-              )}
-            </p>
-          </div>
+          {showCost && (
+            <div>
+              <p className="text-zinc-500">Cost</p>
+              <p className="text-zinc-200">
+                {session.cost_is_estimated && "~"}$
+                {session.total_cost_usd.toFixed(2)}
+                {session.cost_is_estimated && (
+                  <span className="text-zinc-600 ml-1">(est.)</span>
+                )}
+              </p>
+            </div>
+          )}
           <div>
             <p className="text-zinc-500">Messages</p>
             <p className="text-zinc-200">{session.total_messages}</p>

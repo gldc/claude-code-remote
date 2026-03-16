@@ -526,6 +526,7 @@ class DashboardAnalytics(BaseModel):
     total_cost_7d: float = 0.0
     top_model: str | None = None
     active_cron_jobs: int = 0
+    show_cost: bool = False
 
 
 class CronJobWithRuns(CronJob):

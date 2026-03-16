@@ -1,4 +1,5 @@
 import { Routes, Route, NavLink } from "react-router";
+import { ConfigProvider } from "./config";
 
 import SessionList from "./pages/SessionList";
 import SessionDetail from "./pages/SessionDetail";
@@ -34,16 +35,18 @@ function Nav() {
 
 export default function App() {
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <Nav />
-      <main className="mx-auto max-w-7xl px-4 py-6">
-        <Routes>
-          <Route index element={<SessionList />} />
-          <Route path="sessions/:id" element={<SessionDetail />} />
-          <Route path="cron" element={<CronList />} />
-          <Route path="cron/:id" element={<CronDetail />} />
-        </Routes>
-      </main>
-    </div>
+    <ConfigProvider>
+      <div className="min-h-screen bg-zinc-950 text-zinc-100">
+        <Nav />
+        <main className="mx-auto max-w-7xl px-4 py-6">
+          <Routes>
+            <Route index element={<SessionList />} />
+            <Route path="sessions/:id" element={<SessionDetail />} />
+            <Route path="cron" element={<CronList />} />
+            <Route path="cron/:id" element={<CronDetail />} />
+          </Routes>
+        </main>
+      </div>
+    </ConfigProvider>
   );
 }

@@ -23,6 +23,7 @@ DEFAULT_CONFIG = {
     "max_concurrent_sessions": 5,
     "scan_directories": ["~/Developer"],
     "session_idle_timeout_minutes": None,
+    "show_cost": False,
 }
 
 

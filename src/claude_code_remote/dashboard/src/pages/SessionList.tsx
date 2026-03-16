@@ -111,6 +111,7 @@ export default function SessionList() {
           sortKey={sortKey}
           sortDesc={sortDesc}
           onSort={handleSort}
+          showCost={analytics?.show_cost ?? false}
         />
       )}
 

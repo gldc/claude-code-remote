@@ -33,15 +33,20 @@ export default function SummaryBar({
     );
   }
 
+  const cards = [
+    { label: "Active Sessions", value: analytics.active_sessions },
+    ...(analytics.show_cost
+      ? [{ label: "Cost (7d)", value: `$${analytics.total_cost_7d.toFixed(2)}` }]
+      : []),
+    { label: "Top Model", value: analytics.top_model ?? "—" },
+    { label: "Cron Jobs", value: analytics.active_cron_jobs },
+  ];
+
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-      <StatCard label="Active Sessions" value={analytics.active_sessions} />
-      <StatCard
-        label="Cost (7d)"
-        value={`$${analytics.total_cost_7d.toFixed(2)}`}
-      />
-      <StatCard label="Top Model" value={analytics.top_model ?? "—"} />
-      <StatCard label="Cron Jobs" value={analytics.active_cron_jobs} />
+    <div className={`grid grid-cols-2 ${cards.length > 3 ? "md:grid-cols-4" : "md:grid-cols-3"} gap-3 mb-6`}>
+      {cards.map((c) => (
+        <StatCard key={c.label} label={c.label} value={c.value} />
+      ))}
     </div>
   );
 }

@@ -71,16 +71,18 @@ export default function SessionTable({
   sortKey,
   sortDesc,
   onSort,
+  showCost = false,
 }: {
   sessions: DashboardSessionSummary[];
   sortKey: SortKey;
   sortDesc: boolean;
   onSort: (key: SortKey) => void;
+  showCost?: boolean;
 }) {
   const headers: { key: SortKey; label: string }[] = [
     { key: "name", label: "Name" },
     { key: "status", label: "Status" },
-    { key: "total_cost_usd", label: "Cost" },
+    ...(showCost ? [{ key: "total_cost_usd" as SortKey, label: "Cost" }] : []),
     { key: "updated_at", label: "Last Active" },
   ];
 
@@ -129,9 +131,11 @@ export default function SessionTable({
               <td className="px-4 py-3">
                 <StatusBadge status={s.status} />
               </td>
-              <td className="px-4 py-3 text-zinc-300 tabular-nums">
-                {s.cost_is_estimated && "~"}${s.total_cost_usd.toFixed(2)}
-              </td>
+              {showCost && (
+                <td className="px-4 py-3 text-zinc-300 tabular-nums">
+                  {s.cost_is_estimated && "~"}${s.total_cost_usd.toFixed(2)}
+                </td>
+              )}
               <td className="px-4 py-3 text-zinc-400">
                 {timeAgo(s.updated_at)}
               </td>
@@ -146,7 +150,7 @@ export default function SessionTable({
           {sessions.length === 0 && (
             <tr>
               <td
-                colSpan={6}
+                colSpan={showCost ? 6 : 5}
                 className="px-4 py-8 text-center text-zinc-500"
               >
                 No sessions found

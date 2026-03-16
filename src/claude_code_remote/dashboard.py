@@ -26,6 +26,7 @@ def create_dashboard_router(
     session_mgr: SessionManager,
     native_reader: NativeSessionReader,
     cron_mgr: CronManager | None = None,
+    show_cost: bool = False,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -246,6 +247,7 @@ def create_dashboard_router(
             total_cost_7d=round(cost_7d, 2),
             top_model=top_model,
             active_cron_jobs=active_cron,
+            show_cost=show_cost,
         ).model_dump()
 
     @router.post("/sessions/{session_id}/resume")

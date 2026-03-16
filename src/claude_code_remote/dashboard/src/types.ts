@@ -34,6 +34,7 @@ export interface DashboardAnalytics {
   total_cost_7d: number;
   top_model: string | null;
   active_cron_jobs: number;
+  show_cost: boolean;
 }
 
 export interface CronJobRun {
