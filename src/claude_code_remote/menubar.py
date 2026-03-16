@@ -46,12 +46,16 @@ class CCRMenuBarApp(rumps.App):
             f"{self.display_host}:{port}",
             callback=self._copy_address,
         )
+        self.dashboard_item = rumps.MenuItem(
+            "Open Dashboard", callback=self._open_dashboard
+        )
         self.no_sessions_item = rumps.MenuItem("No sessions")
         self.no_sessions_item.set_callback(None)
 
         self.menu = [
             self.server_item,
             self.address_item,
+            self.dashboard_item,
             None,  # separator
             self.no_sessions_item,
             None,  # separator
@@ -121,6 +125,12 @@ class CCRMenuBarApp(rumps.App):
         no_sessions_key = "No sessions"
         if no_sessions_key in self.menu:
             del self.menu[no_sessions_key]
+
+    def _open_dashboard(self, _):
+        """Open the dashboard in the default browser."""
+        import webbrowser
+
+        webbrowser.open(f"{self.address_url}/dashboard/")
 
     def _copy_address(self, _):
         """Copy the server URL to clipboard."""
