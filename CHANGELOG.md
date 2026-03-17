@@ -22,6 +22,9 @@
 - `search_sessions()` and `_to_summary()` updated for native event structure
 
 ### Fixed
+- JSONL sync uses timestamp comparison instead of message counts (counts were unreliable across different event type sets)
+- JSONL sync runs at start of `send_prompt()` to catch terminal messages between CCR turns (previous guard blocked sync during active sessions)
+- Session list preview no longer shows raw JSON from internal protocol messages
 - Git status/diff/branches/log endpoints return empty results instead of 500 for non-git project directories
 - Synthetic `result` event only emitted on process exit when CLI didn't send one (prevents duplicates)
 

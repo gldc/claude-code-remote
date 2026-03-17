@@ -200,7 +200,7 @@ The server merges native Claude Code terminal sessions alongside CCR-managed ses
 - **Unified session list** -- native sessions from `~/.claude/projects/` appear in `/api/sessions` alongside CCR sessions, filtered to the last 7 days by default (configurable via `native_max_age_days`)
 - **Transparent adoption** -- sending a message to a native session from the app automatically "adopts" it as a CCR session with `--resume`, preserving full conversation history
 - **Conflict prevention** -- active native processes (detected via PID) block concurrent access from the app
-- **JSONL sync** -- when opening a session, messages are synced from the JSONL source of truth so terminal activity appears in the app
+- **JSONL sync** -- the native JSONL file is the source of truth for conversation history; messages are synced at the start of each turn and on WebSocket connect, so terminal activity always appears in the app
 - **Non-destructive hide** -- native sessions can be hidden (archive) or permanently hidden (delete) without touching the JSONL files; hidden sessions appear in the archive view
 - **Server hostname badge** -- native sessions show the server's hostname in the app for multi-machine awareness
 

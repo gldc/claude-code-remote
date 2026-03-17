@@ -56,6 +56,7 @@ ccr start --no-auth     # Local dev mode (127.0.0.1, no Tailscale auth)
 - **Menubar:** Shows MagicDNS hostname, live session list with status badges (● running, ◉ awaiting approval, ○ down), and an "Open Dashboard" button.
 - **Native event format:** The server passes Claude Code's stream-json events through to clients without translation. Messages stored in `session.messages` use the native format (`assistant`, `tool_result`, `user`, `result`). The only CCR-specific event type is `approval_request`. Old WSMessage-format sessions are migrated on load.
 - **Native session interop:** The `/api/sessions` endpoints merge native Claude Code sessions (from `~/.claude/projects/`) with CCR sessions. Native sessions from the last 7 days appear automatically (configurable via `native_max_age_days` in config). Users can hide/unhide native sessions non-destructively. Sending a message to a native session "adopts" it as a CCR session. Active native processes (checked via PID) block concurrent access from the app.
+- **JSONL sync:** The native JSONL file (`~/.claude/projects/<path>/<uuid>.jsonl`) is the source of truth for conversation history. `sync_from_jsonl()` runs at the start of each `send_prompt()` call and on WebSocket connect, merging any messages added via terminal between CCR turns. Uses timestamp comparison (not message counts) to detect new content. CCR-specific events (`approval_request`) are preserved during merge.
 
 ## CLI Commands
 
