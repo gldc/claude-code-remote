@@ -1,5 +1,4 @@
 # tests/test_models.py
-import pytest
 from claude_code_remote.models import (
     Session,
     SessionStatus,
