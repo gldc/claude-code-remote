@@ -335,21 +335,14 @@ class SessionManager:
         If the user continued a session in the terminal, those messages only exist
         in the JSONL. This method merges them into session.messages.
 
-        Only syncs when the session is NOT actively running — during active sessions,
-        the WebSocket stream is the source of truth and syncing would cause races.
+        Called from send_prompt() (before spawning subprocess) and from
+        GET/WebSocket handlers (for viewing). Safe to call at any time —
+        only replaces messages if the JSONL has genuinely newer content.
         """
         if not self.native_reader:
             return
         session = self.sessions.get(session_id)
         if not session or not session.claude_session_id:
-            return
-
-        # Don't sync while a CLI subprocess is actively streaming — it's the
-        # live source of truth and syncing would cause races. But DO sync when
-        # there's no active subprocess, even if status is "running" (the user
-        # may have continued the session in the terminal between CCR turns).
-        proc = self.processes.get(session_id)
-        if proc and proc.returncode is None:
             return
 
         # Compare timestamps to detect new content (count-based comparison
@@ -412,6 +405,10 @@ class SessionManager:
         session = self.sessions.get(session_id)
         if not session:
             raise ValueError(f"Session {session_id} not found")
+
+        # Sync from JSONL before starting — picks up any messages
+        # added via terminal between CCR turns
+        self.sync_from_jsonl(session_id)
 
         # Record the user message so it persists across reconnects
         user_event = {
