@@ -349,6 +349,7 @@ class SessionManager:
 
         # Keep CCR-specific events (approval_request) not in JSONL
         ccr_only = [m for m in session.messages if m.get("type") == "approval_request"]
+        old_count = len(session.messages)
 
         # JSONL messages are the base; insert CCR-only events by timestamp
         merged = list(jsonl_messages)
@@ -367,7 +368,7 @@ class SessionManager:
         session.updated_at = datetime.now(timezone.utc)
         logger.info(
             f"[session {session_id}] Synced {total} messages from JSONL "
-            f"(was {len(session.messages) - len(ccr_only)})"
+            f"(was {old_count})"
         )
 
     async def send_prompt(self, session_id: str, prompt: str) -> None:
