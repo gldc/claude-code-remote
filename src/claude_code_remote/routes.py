@@ -301,6 +301,8 @@ def create_router(
         _check_session_access(session_id, request)
         session = session_mgr.get_session(session_id)
         if session:
+            # Sync messages from JSONL in case terminal added new ones
+            session_mgr.sync_from_jsonl(session_id)
             return session
 
         # Fall through to native session

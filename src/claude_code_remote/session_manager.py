@@ -35,6 +35,7 @@ class SessionManager:
         self.max_concurrent = max_concurrent
         self.api_url = api_url
         self.push_mgr = push_mgr
+        self.native_reader = None  # Set by server.py after creation
         self.sessions: dict[str, Session] = {}
         self.processes: dict[str, asyncio.subprocess.Process] = {}
         self.ws_subscribers: dict[str, list[Callable]] = {}
@@ -326,6 +327,48 @@ class SessionManager:
         if not session:
             return None
         return session.model_dump(mode="json")
+
+    def sync_from_jsonl(self, session_id: str) -> None:
+        """Sync session messages from the native JSONL file if it has newer content.
+
+        The JSONL file is the source of truth — both CCR and terminal write to it.
+        If the user continued a session in the terminal, those messages only exist
+        in the JSONL. This method merges them into session.messages.
+        """
+        if not self.native_reader:
+            return
+        session = self.sessions.get(session_id)
+        if not session or not session.claude_session_id:
+            return
+
+        jsonl_messages, total = self.native_reader.get_session_messages(
+            session.claude_session_id, limit=50000
+        )
+        if not jsonl_messages or total <= len(session.messages):
+            return
+
+        # Keep CCR-specific events (approval_request) not in JSONL
+        ccr_only = [m for m in session.messages if m.get("type") == "approval_request"]
+
+        # JSONL messages are the base; insert CCR-only events by timestamp
+        merged = list(jsonl_messages)
+        for evt in ccr_only:
+            ts = evt.get("timestamp", "")
+            inserted = False
+            for i, m in enumerate(merged):
+                if m.get("timestamp", "") > ts:
+                    merged.insert(i, evt)
+                    inserted = True
+                    break
+            if not inserted:
+                merged.append(evt)
+
+        session.messages = merged
+        session.updated_at = datetime.now(timezone.utc)
+        logger.info(
+            f"[session {session_id}] Synced {total} messages from JSONL "
+            f"(was {len(session.messages) - len(ccr_only)})"
+        )
 
     async def send_prompt(self, session_id: str, prompt: str) -> None:
         """Send a prompt by spawning a per-turn claude process.

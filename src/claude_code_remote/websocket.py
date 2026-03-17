@@ -37,6 +37,9 @@ def create_ws_router(session_mgr: SessionManager) -> APIRouter:
 
         await websocket.accept()
 
+        # Sync messages from JSONL in case terminal added new ones
+        session_mgr.sync_from_jsonl(session_id)
+
         # Send existing messages as backfill
         for msg in session.messages:
             await websocket.send_json(msg)

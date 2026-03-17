@@ -75,6 +75,7 @@ def create_app(
     )
     terminal_mgr = TerminalManager()
     native_reader = NativeSessionReader()
+    session_mgr.native_reader = native_reader
     hidden_store = HiddenSessionsStore(HIDDEN_SESSIONS_FILE)
     scan_dirs = config.get("scan_directories", ["~/Developer"])
 
