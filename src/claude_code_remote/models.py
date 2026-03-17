@@ -113,6 +113,8 @@ class SessionSummary(BaseModel):
     last_message_preview: str | None = None
     archived: bool = False
     cron_job_id: str | None = None
+    source: str = "ccr"  # "ccr" or "native"
+    native_pid: int | None = None  # PID if session is active in terminal
 
 
 # --- Template ---
