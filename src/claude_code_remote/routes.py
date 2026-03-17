@@ -732,17 +732,21 @@ def create_router(
 
     @router.get("/status")
     async def server_status():
+        import socket
+
         sessions = session_mgr.list_sessions()
         active = sum(
             1
             for s in sessions
             if s.status in (SessionStatus.RUNNING, SessionStatus.AWAITING_APPROVAL)
         )
+        hostname = socket.gethostname().split(".")[0]
         return {
             "status": "ok",
             "active_sessions": active,
             "total_sessions": len(sessions),
             "show_cost": show_cost,
+            "hostname": hostname,
         }
 
     # --- Push ---
