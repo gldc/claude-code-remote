@@ -58,7 +58,7 @@ class _CachedMetadata:
 class NativeSessionReader:
     """Reads native Claude Code sessions from the local filesystem."""
 
-    DISPLAYED_TYPES = {"user", "assistant", "system"}
+    DISPLAYED_TYPES = {"user", "assistant", "tool_result"}
 
     def __init__(self, claude_dir: Path | None = None):
         self._claude_dir = claude_dir or Path.home() / ".claude"
@@ -185,6 +185,15 @@ class NativeSessionReader:
                 continue
         return active
 
+    def load_active_pids(self) -> dict[str, int]:
+        """Return a map of session_id -> PID for all currently active native sessions."""
+        return self._load_active_sessions()
+
+    def get_active_pid(self, session_id: str) -> int | None:
+        """Return the PID if this session is currently running natively, else None."""
+        active = self._load_active_sessions()
+        return active.get(session_id)
+
     def _scan_sessions(self) -> None:
         """Scan projects directory and update cache."""
         if not self._projects_dir.exists():
@@ -226,14 +235,37 @@ class NativeSessionReader:
             del self._cache[stale_id]
             self._session_paths.pop(stale_id, None)
 
-    def list_sessions(self) -> list[DashboardSessionSummary]:
-        """List all native sessions with cached metadata, excluding temp dirs."""
+    def list_sessions(
+        self,
+        max_age_days: int | None = None,
+        hidden_ids: set[str] | None = None,
+        archived: bool = False,
+    ) -> list[DashboardSessionSummary]:
+        """List native sessions with optional recency and visibility filters."""
         self._scan_sessions()
-        return [
-            c.summary
-            for c in self._cache.values()
-            if c.summary.project_dir not in _HIDDEN_PROJECT_DIRS
-        ]
+
+        now = datetime.now(timezone.utc)
+        results = []
+        for c in self._cache.values():
+            s = c.summary
+            if s.project_dir in _HIDDEN_PROJECT_DIRS:
+                continue
+
+            is_hidden = hidden_ids and s.id in hidden_ids
+
+            if archived:
+                if not is_hidden:
+                    continue
+            else:
+                if is_hidden:
+                    continue
+                if max_age_days is not None:
+                    age = now - s.updated_at
+                    if age.days > max_age_days:
+                        continue
+
+            results.append(s)
+        return results
 
     def get_session(self, session_id: str) -> DashboardSessionSummary | None:
         """Get metadata for a single session."""
@@ -241,12 +273,66 @@ class NativeSessionReader:
         cached = self._cache.get(session_id)
         return cached.summary if cached else None
 
+    @staticmethod
+    def _flatten_content(content) -> str:
+        """Convert native tool_result content to a plain string.
+
+        Content can be a string, or an array of {"type": "text", "text": "..."}
+        objects (sometimes mixed with tool_reference objects).
+        """
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "\n".join(
+                item.get("text", "")
+                for item in content
+                if isinstance(item, dict) and item.get("type") == "text"
+            )
+        return str(content) if content else ""
+
+    def _normalize_event(self, event: dict) -> list[dict]:
+        """Normalize a native JSONL event to stream-JSON format.
+
+        user events with string content pass through as-is.
+        user events with array content have tool_result items extracted
+        as top-level events (matching stream-JSON format).
+        All other event types pass through unchanged.
+        """
+        if event.get("type") != "user":
+            return [event]
+
+        content = event.get("message", {}).get("content")
+        if isinstance(content, str):
+            return [event]
+
+        if not isinstance(content, list):
+            return [event]
+
+        # Extract tool_result items as top-level events
+        ts = event.get("timestamp")
+        results = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "tool_result":
+                results.append(
+                    {
+                        "type": "tool_result",
+                        "content": self._flatten_content(item.get("content", "")),
+                        "tool_use_id": item.get("tool_use_id", ""),
+                        "is_error": item.get("is_error", False),
+                        "timestamp": ts,
+                    }
+                )
+        return results
+
     def get_session_messages(
         self, session_id: str, offset: int = 0, limit: int = 100
     ) -> tuple[list[dict], int]:
         """Get paginated messages for a session.
 
-        Returns (messages, total_count) where messages are only displayed types.
+        Returns (messages, total_count) where messages are normalized to
+        stream-JSON format (tool_results extracted from user array content).
         """
         self._scan_sessions()
         jsonl_path = self._session_paths.get(session_id)
@@ -265,7 +351,7 @@ class NativeSessionReader:
                     except json.JSONDecodeError:
                         continue
                     if event.get("type") in self.DISPLAYED_TYPES:
-                        messages.append(event)
+                        messages.extend(self._normalize_event(event))
         except OSError:
             return [], 0
 

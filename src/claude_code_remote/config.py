@@ -17,6 +17,7 @@ APPROVAL_RULES_FILE = STATE_DIR / "approval_rules.json"
 WORKFLOW_DIR = STATE_DIR / "workflows"
 CRON_DIR = STATE_DIR / "cron"
 CRON_HISTORY_FILE = STATE_DIR / "cron_history.jsonl"
+HIDDEN_SESSIONS_FILE = STATE_DIR / "hidden_sessions.json"
 
 DEFAULT_CONFIG = {
     "port": 8080,
@@ -24,6 +25,7 @@ DEFAULT_CONFIG = {
     "scan_directories": ["~/Developer"],
     "session_idle_timeout_minutes": None,
     "show_cost": False,
+    "native_max_age_days": 7,
 }
 
 

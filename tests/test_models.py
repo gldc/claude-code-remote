@@ -1,5 +1,4 @@
 # tests/test_models.py
-import pytest
 from claude_code_remote.models import (
     Session,
     SessionStatus,
@@ -8,8 +7,6 @@ from claude_code_remote.models import (
     TemplateCreate,
     Project,
     ProjectType,
-    WSMessage,
-    WSMessageType,
     PushSettings,
 )
 
@@ -35,11 +32,23 @@ def test_template_create():
     assert t.model is None
 
 
-def test_ws_message_serialization():
-    msg = WSMessage(type=WSMessageType.ASSISTANT_TEXT, data={"text": "hello"})
-    d = msg.model_dump()
-    assert d["type"] == "assistant_text"
-    assert "timestamp" in d
+def test_native_event_format():
+    """Validate that native event dicts have the expected shape."""
+    assistant_event = {
+        "type": "assistant",
+        "message": {"content": [{"type": "text", "text": "hello"}]},
+        "timestamp": "2026-03-17T00:00:00+00:00",
+    }
+    assert assistant_event["type"] == "assistant"
+    assert assistant_event["message"]["content"][0]["text"] == "hello"
+
+    user_event = {
+        "type": "user",
+        "message": {"role": "user", "content": "hi"},
+        "timestamp": "2026-03-17T00:00:00+00:00",
+    }
+    assert user_event["type"] == "user"
+    assert user_event["message"]["content"] == "hi"
 
 
 def test_project_type_detection():

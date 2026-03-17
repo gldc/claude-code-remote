@@ -125,6 +125,8 @@ The `ccr stop` and `ccr start` commands include orphan process detection -- if a
 | `/api/workflows/{id}/run` | POST | Run a workflow |
 | `/api/workflows/{id}/steps` | POST | Add step to a workflow |
 | `/api/sessions/{id}/upload` | POST | Upload file attachments to a session |
+| `/api/sessions/{id}/hide` | POST | Hide native session (`?permanent=true` for permanent) |
+| `/api/sessions/{id}/unhide` | POST | Unhide a hidden native session |
 | `/api/cron-jobs` | GET, POST | List or create cron jobs |
 | `/api/cron-jobs/{id}` | GET, PATCH, DELETE | Get, update, or delete a cron job |
 | `/api/cron-jobs/{id}/toggle` | POST | Enable or disable a cron job |
@@ -191,6 +193,19 @@ curl -X POST http://<server>/api/sessions/{id}/upload \
 - `claude-uploads/` is automatically added to `.gitignore`
 - Uploads are rejected for completed sessions
 
+## Native Session Interop
+
+The server merges native Claude Code terminal sessions alongside CCR-managed sessions, enabling seamless switching between the terminal and the mobile app.
+
+- **Unified session list** -- native sessions from `~/.claude/projects/` appear in `/api/sessions` alongside CCR sessions, filtered to the last 7 days by default (configurable via `native_max_age_days`)
+- **Transparent adoption** -- sending a message to a native session from the app automatically "adopts" it as a CCR session with `--resume`, preserving full conversation history
+- **Conflict prevention** -- active native processes (detected via PID) block concurrent access from the app
+- **JSONL sync** -- the native JSONL file is the source of truth for conversation history; messages are synced at the start of each turn and on WebSocket connect, so terminal activity always appears in the app
+- **Non-destructive hide** -- native sessions can be hidden (archive) or permanently hidden (delete) without touching the JSONL files; hidden sessions appear in the archive view
+- **Server hostname badge** -- native sessions show the server's hostname in the app for multi-machine awareness
+
+The server uses Claude Code's native stream-json event format throughout -- no translation layer. Both CCR and native sessions produce identical event structures.
+
 ## Tool Approval
 
 The server includes a PreToolUse hook that routes Claude Code's tool calls to your phone for approval:
@@ -235,7 +250,8 @@ Config file: `~/.config/claude-code-remote/config.json`
 {
   "port": 8080,
   "max_concurrent_sessions": 5,
-  "scan_directories": ["~/Developer"]
+  "scan_directories": ["~/Developer"],
+  "native_max_age_days": 7
 }
 ```
 

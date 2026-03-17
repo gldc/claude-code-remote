@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from claude_code_remote.auth import identify_tailscale_client
 from claude_code_remote.session_manager import SessionManager
-from claude_code_remote.models import WSMessage
 
 logger = logging.getLogger(__name__)
 
@@ -39,15 +37,18 @@ def create_ws_router(session_mgr: SessionManager) -> APIRouter:
 
         await websocket.accept()
 
+        # Sync messages from JSONL in case terminal added new ones
+        session_mgr.sync_from_jsonl(session_id)
+
         # Send existing messages as backfill
         for msg in session.messages:
             await websocket.send_json(msg)
 
         # Subscribe to new events
-        queue: asyncio.Queue[WSMessage] = asyncio.Queue()
+        queue: asyncio.Queue[dict] = asyncio.Queue()
 
-        async def on_event(msg: WSMessage):
-            await queue.put(msg)
+        async def on_event(event: dict):
+            await queue.put(event)
 
         session_mgr.subscribe(session_id, on_event)
 
@@ -55,7 +56,7 @@ def create_ws_router(session_mgr: SessionManager) -> APIRouter:
             while True:
                 try:
                     msg = await asyncio.wait_for(queue.get(), timeout=30)
-                    await websocket.send_json(msg.model_dump(mode="json"))
+                    await websocket.send_json(msg)
                 except asyncio.TimeoutError:
                     # Send ping to keep connection alive
                     await websocket.send_json({"type": "ping"})
