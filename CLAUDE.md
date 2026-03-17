@@ -54,6 +54,8 @@ ccr start --no-auth     # Local dev mode (127.0.0.1, no Tailscale auth)
 - **File uploads:** `POST /api/sessions/{id}/upload` saves files to `claude-uploads/` in the project root with filename sanitization and automatic `.gitignore` management.
 - **Orphan process cleanup:** `ccr stop` and `ccr start` detect orphaned server processes via `lsof` and offer SIGTERM → SIGKILL escalation.
 - **Menubar:** Shows MagicDNS hostname, live session list with status badges (● running, ◉ awaiting approval, ○ down), and an "Open Dashboard" button.
+- **Native event format:** The server passes Claude Code's stream-json events through to clients without translation. Messages stored in `session.messages` use the native format (`assistant`, `tool_result`, `user`, `result`). The only CCR-specific event type is `approval_request`. Old WSMessage-format sessions are migrated on load.
+- **Native session interop:** The `/api/sessions` endpoints merge native Claude Code sessions (from `~/.claude/projects/`) with CCR sessions. Native sessions from the last 7 days appear automatically (configurable via `native_max_age_days` in config). Users can hide/unhide native sessions non-destructively. Sending a message to a native session "adopts" it as a CCR session. Active native processes (checked via PID) block concurrent access from the app.
 
 ## CLI Commands
 
@@ -94,6 +96,7 @@ ccr start --no-auth     # Local dev mode (127.0.0.1, no Tailscale auth)
 | `src/claude_code_remote/dashboard.py` | Dashboard API routes -- unified session views, analytics, cron management |
 | `src/claude_code_remote/native_sessions.py` | Native Claude Code session discovery from `~/.claude/` with cost estimation |
 | `src/claude_code_remote/uploads.py` | File upload utilities -- sanitization, storage, gitignore management |
+| `src/claude_code_remote/hidden_sessions.py` | Non-destructive hidden sessions store for native session visibility |
 | `src/claude_code_remote/dashboard/` | React + TypeScript + Vite dashboard SPA (session list, detail, cron views) |
 | `src/claude_code_remote/hooks/ccr_approval.py` | PreToolUse hook script for tool approval routing |
 | `pyproject.toml` | Package configuration |
@@ -139,6 +142,8 @@ ccr start --no-auth     # Local dev mode (127.0.0.1, no Tailscale auth)
 - `POST /api/workflows/{id}/run` -- Run a workflow
 - `POST /api/workflows/{id}/steps` -- Add step to workflow
 - `POST /api/sessions/{id}/upload` -- Upload file attachments to a session
+- `POST /api/sessions/{id}/hide` -- Hide native session (add `?permanent=true` for permanent)
+- `POST /api/sessions/{id}/unhide` -- Unhide a hidden native session
 - `GET/POST /api/cron-jobs` -- List/create cron jobs
 - `GET/PATCH/DELETE /api/cron-jobs/{id}` -- Get/update/delete cron job
 - `POST /api/cron-jobs/{id}/toggle` -- Enable/disable cron job
