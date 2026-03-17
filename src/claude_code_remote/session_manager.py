@@ -348,15 +348,17 @@ class SessionManager:
         if session.status in (SessionStatus.RUNNING, SessionStatus.AWAITING_APPROVAL):
             return
 
+        # Count only non-CCR-specific messages for comparison
+        # (approval_request events are CCR-only and not in the JSONL)
+        ccr_only = [m for m in session.messages if m.get("type") == "approval_request"]
+        non_ccr_count = len(session.messages) - len(ccr_only)
+        old_count = len(session.messages)
+
         jsonl_messages, total = self.native_reader.get_session_messages(
             session.claude_session_id, limit=50000
         )
-        if not jsonl_messages or total <= len(session.messages):
+        if not jsonl_messages or total <= non_ccr_count:
             return
-
-        # Keep CCR-specific events (approval_request) not in JSONL
-        ccr_only = [m for m in session.messages if m.get("type") == "approval_request"]
-        old_count = len(session.messages)
 
         # JSONL messages are the base; insert CCR-only events by timestamp
         merged = list(jsonl_messages)
