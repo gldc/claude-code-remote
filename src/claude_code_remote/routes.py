@@ -39,6 +39,7 @@ from claude_code_remote.models import (
     CronJobUpdate,
     UploadedFile,
     UploadResponse,
+    GitStatus,
 )
 from claude_code_remote.native_sessions import NativeSessionReader
 from claude_code_remote.hidden_sessions import HiddenSessionsStore
@@ -482,7 +483,10 @@ def create_router(
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404)
-        return await git_status(session.project_dir)
+        try:
+            return await git_status(session.project_dir)
+        except (RuntimeError, TimeoutError):
+            return GitStatus()
 
     @router.get("/sessions/{session_id}/git/diff")
     async def get_git_diff(session_id: str, request: Request, file: str | None = None):
@@ -490,7 +494,10 @@ def create_router(
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404)
-        return {"diff": await git_diff(session.project_dir, file)}
+        try:
+            return {"diff": await git_diff(session.project_dir, file)}
+        except (RuntimeError, TimeoutError):
+            return {"diff": ""}
 
     @router.get("/sessions/{session_id}/git/branches")
     async def get_git_branches(session_id: str, request: Request):
@@ -498,7 +505,10 @@ def create_router(
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404)
-        return await git_branches(session.project_dir)
+        try:
+            return await git_branches(session.project_dir)
+        except (RuntimeError, TimeoutError):
+            return []
 
     @router.get("/sessions/{session_id}/git/log")
     async def get_git_log(session_id: str, request: Request, n: int = 10):
@@ -507,7 +517,10 @@ def create_router(
         session = session_mgr.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404)
-        return await git_log(session.project_dir, n)
+        try:
+            return await git_log(session.project_dir, n)
+        except (RuntimeError, TimeoutError):
+            return []
 
     # --- Session Collaboration ---
 
