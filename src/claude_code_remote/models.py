@@ -35,19 +35,6 @@ class ProjectType(str, Enum):
     UNKNOWN = "unknown"
 
 
-class WSMessageType(str, Enum):
-    ASSISTANT_TEXT = "assistant_text"
-    USER_MESSAGE = "user_message"
-    TOOL_USE = "tool_use"
-    TOOL_RESULT = "tool_result"
-    STATUS_CHANGE = "status_change"
-    APPROVAL_REQUEST = "approval_request"
-    ERROR = "error"
-    RATE_LIMIT = "rate_limit"
-    COST_UPDATE = "cost_update"
-    BASH_OUTPUT = "bash_output"
-
-
 # --- Session ---
 
 
@@ -176,15 +163,6 @@ class ProjectCreate(BaseModel):
 class ProjectClone(BaseModel):
     url: str
     name: str | None = None
-
-
-# --- WebSocket ---
-
-
-class WSMessage(BaseModel):
-    type: WSMessageType
-    data: dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # --- Push ---

@@ -17,8 +17,6 @@ from claude_code_remote.models import (
     SessionCreate,
     SessionStatus,
     SessionSummary,
-    WSMessage,
-    WSMessageType,
 )
 from claude_code_remote.push import PushManager
 
@@ -76,7 +74,19 @@ class SessionManager:
         preview = None
         if s.messages:
             last = s.messages[-1]
-            preview = str(last.get("data", {}).get("text", ""))[:100]
+            msg_type = last.get("type")
+            if msg_type == "assistant":
+                for block in last.get("message", {}).get("content", []):
+                    if block.get("type") == "text":
+                        preview = block.get("text", "")[:100]
+                        break
+            elif msg_type == "user":
+                content = last.get("message", {}).get("content", "")
+                preview = (content if isinstance(content, str) else str(content))[:100]
+            elif msg_type == "tool_result":
+                preview = str(last.get("content", ""))[:100]
+            elif msg_type == "result":
+                preview = "Completed" if last.get("subtype") == "success" else "Error"
         return SessionSummary(
             id=s.id,
             name=s.name,
@@ -155,6 +165,85 @@ class SessionManager:
         path.write_text(session.model_dump_json(indent=2))
         os.chmod(path, 0o600)
 
+    def _migrate_messages(self, messages: list[dict]) -> list[dict]:
+        """Convert old WSMessage-format messages to native event format."""
+        migrated = []
+        for msg in messages:
+            msg_type = msg.get("type")
+            data = msg.get("data", {})
+            ts = msg.get("timestamp", datetime.now(timezone.utc).isoformat())
+
+            if msg_type == "user_message":
+                migrated.append(
+                    {
+                        "type": "user",
+                        "message": {"role": "user", "content": data.get("text", "")},
+                        "timestamp": ts,
+                    }
+                )
+            elif msg_type == "assistant_text":
+                migrated.append(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "content": [{"type": "text", "text": data.get("text", "")}]
+                        },
+                        "timestamp": ts,
+                    }
+                )
+            elif msg_type == "tool_use":
+                migrated.append(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "content": [
+                                {
+                                    "type": "tool_use",
+                                    "name": data.get("tool_name", ""),
+                                    "input": data.get("tool_input", {}),
+                                    "id": data.get("tool_use_id", ""),
+                                }
+                            ]
+                        },
+                        "timestamp": ts,
+                    }
+                )
+            elif msg_type == "tool_result":
+                migrated.append(
+                    {
+                        "type": "tool_result",
+                        "content": data.get("output", data.get("content", "")),
+                        "tool_use_id": data.get("tool_use_id", ""),
+                        "is_error": data.get("is_error", False),
+                        "timestamp": ts,
+                    }
+                )
+            elif msg_type == "status_change":
+                migrated.append(
+                    {
+                        "type": "result",
+                        "subtype": "success"
+                        if data.get("status") == "idle"
+                        else "error",
+                        "total_cost_usd": data.get("cost_usd", 0),
+                        "duration_ms": data.get("duration_ms", 0),
+                        "timestamp": ts,
+                    }
+                )
+            elif msg_type == "approval_request":
+                migrated.append(msg)  # Keep as-is
+            elif msg_type == "rate_limit":
+                migrated.append(
+                    {
+                        "type": "rate_limit_event",
+                        "rate_limit_info": data,
+                        "timestamp": ts,
+                    }
+                )
+            else:
+                migrated.append(msg)  # Unknown types pass through
+        return migrated
+
     def load_sessions(self) -> None:
         for path in self.session_dir.glob("*.json"):
             try:
@@ -165,15 +254,16 @@ class SessionManager:
                 ):
                     session.status = SessionStatus.ERROR
                     session.error_message = "Server restarted while session was active"
-                # Migrate tool_result messages: rename "content" → "output"
+                # Migrate old WSMessage-format messages to native event format
                 migrated = False
-                for msg in session.messages:
-                    if msg.get("type") == "tool_result" and "content" in msg.get(
-                        "data", {}
-                    ):
-                        data = msg["data"]
-                        data["output"] = data.pop("content")
-                        migrated = True
+                needs_migration = any(
+                    msg.get("type")
+                    in ("assistant_text", "tool_use", "user_message", "status_change")
+                    for msg in session.messages
+                )
+                if needs_migration:
+                    session.messages = self._migrate_messages(session.messages)
+                    migrated = True
                 self.sessions[session.id] = session
                 if migrated:
                     self.persist_session(session.id)
@@ -197,26 +287,27 @@ class SessionManager:
         for sid, session in self.sessions.items():
             for msg in session.messages:
                 text = ""
-                data = msg.get("data", {})
-                if msg.get("type") == "assistant_text":
-                    text = data.get("text", "")
-                elif msg.get("type") == "user_message":
-                    text = data.get("text", "")
-                elif msg.get("type") == "tool_result":
-                    text = str(data.get("output", ""))
+                msg_type = msg.get("type")
+                if msg_type == "assistant":
+                    for block in msg.get("message", {}).get("content", []):
+                        if block.get("type") == "text":
+                            text += block.get("text", "")
+                elif msg_type == "user":
+                    content = msg.get("message", {}).get("content", "")
+                    text = content if isinstance(content, str) else str(content)
+                elif msg_type == "tool_result":
+                    text = str(msg.get("content", ""))
 
                 if query_lower in text.lower():
-                    # Extract snippet around match
                     idx = text.lower().index(query_lower)
                     start = max(0, idx - 50)
                     end = min(len(text), idx + len(query) + 50)
-                    snippet = text[start:end]
                     results.append(
                         {
                             "session_id": sid,
                             "session_name": session.name,
-                            "snippet": snippet,
-                            "message_type": msg.get("type"),
+                            "snippet": text[start:end],
+                            "message_type": msg_type,
                             "timestamp": msg.get("timestamp"),
                         }
                     )
@@ -241,12 +332,13 @@ class SessionManager:
             raise ValueError(f"Session {session_id} not found")
 
         # Record the user message so it persists across reconnects
-        user_ws_msg = WSMessage(
-            type=WSMessageType.USER_MESSAGE,
-            data={"text": prompt},
-        )
-        session.messages.append(user_ws_msg.model_dump(mode="json"))
-        await self._broadcast(session_id, user_ws_msg)
+        user_event = {
+            "type": "user",
+            "message": {"role": "user", "content": prompt},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        session.messages.append(user_event)
+        await self._broadcast(session_id, user_event)
 
         # Stop any existing process for this session
         self._stop_process(session_id)
@@ -355,6 +447,7 @@ class SessionManager:
             return
 
         logger.info(f"[session {session_id}] Starting output reader")
+        seen_result = False
         try:
             while True:
                 line = await proc.stdout.readline()
@@ -370,12 +463,11 @@ class SessionManager:
                     logger.warning(f"[session {session_id}] Bad JSON: {text[:200]}")
                     continue
 
-                parsed = self._parse_event(event)
-                if parsed:
-                    ws_msgs = parsed if isinstance(parsed, list) else [parsed]
-                    for ws_msg in ws_msgs:
-                        session.messages.append(ws_msg.model_dump(mode="json"))
-                        await self._broadcast(session_id, ws_msg)
+                if self._should_broadcast(event):
+                    if "timestamp" not in event:
+                        event["timestamp"] = datetime.now(timezone.utc).isoformat()
+                    session.messages.append(event)
+                    await self._broadcast(session_id, event)
                     session.updated_at = datetime.now(timezone.utc)
                 else:
                     logger.debug(
@@ -391,6 +483,7 @@ class SessionManager:
 
                 # Capture session ID, cost, and context from result event
                 if event.get("type") == "result":
+                    seen_result = True
                     claude_sid = event.get("session_id")
                     if claude_sid:
                         session.claude_session_id = claude_sid
@@ -433,6 +526,19 @@ class SessionManager:
         logger.info(
             f"[session {session_id}] Process exited with code {proc.returncode}"
         )
+
+        # Emit synthetic result event if none was received from the CLI
+        if session.status == SessionStatus.RUNNING and not seen_result:
+            result_event = {
+                "type": "result",
+                "subtype": "success" if proc.returncode == 0 else "error",
+                "total_cost_usd": session.total_cost_usd,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            if proc.returncode != 0:
+                result_event["error"] = f"Process exited with code {proc.returncode}"
+            session.messages.append(result_event)
+            await self._broadcast(session_id, result_event)
 
         # Process exit = turn complete
         if session.status == SessionStatus.RUNNING:
@@ -479,76 +585,16 @@ class SessionManager:
             if text:
                 logger.info(f"[session {session_id}] STDERR: {text}")
 
-    def _parse_event(self, event: dict) -> list[WSMessage] | WSMessage | None:
+    def _should_broadcast(self, event: dict) -> bool:
+        """Determine if a stream-json event should be stored and broadcast."""
         etype = event.get("type")
-
-        if etype == "assistant":
-            msg = event.get("message", {})
-            content = msg.get("content", [])
-            messages = []
-            for block in content:
-                if block.get("type") == "text":
-                    messages.append(
-                        WSMessage(
-                            type=WSMessageType.ASSISTANT_TEXT,
-                            data={"text": block["text"]},
-                        )
-                    )
-                elif block.get("type") == "tool_use":
-                    messages.append(
-                        WSMessage(
-                            type=WSMessageType.TOOL_USE,
-                            data={
-                                "tool_name": block.get("name", ""),
-                                "tool_input": block.get("input", {}),
-                                "tool_use_id": block.get("id", ""),
-                            },
-                        )
-                    )
-            if not messages:
-                return None
-            return messages if len(messages) > 1 else messages[0]
-
-        elif etype == "tool_result":
-            content = event.get("content", "")
-            tool_use_id = event.get("tool_use_id", "")
-            is_error = event.get("is_error", False)
-
-            # Detect content type
-            content_type = "text"
-            if isinstance(content, str) and (
-                content.startswith("diff --git") or content.startswith("---")
-            ):
-                content_type = "diff"
-
-            return WSMessage(
-                type=WSMessageType.TOOL_RESULT,
-                data={
-                    "tool_use_id": tool_use_id,
-                    "output": content,
-                    "content_type": content_type,
-                    "is_error": is_error,
-                },
-            )
-
-        elif etype == "result":
-            return WSMessage(
-                type=WSMessageType.STATUS_CHANGE,
-                data={
-                    "status": "idle" if event.get("subtype") == "success" else "error",
-                    "cost_usd": event.get("total_cost_usd", 0),
-                    "duration_ms": event.get("duration_ms", 0),
-                    "result": event.get("result", ""),
-                },
-            )
-
-        elif etype == "rate_limit_event":
-            return WSMessage(
-                type=WSMessageType.RATE_LIMIT,
-                data=event.get("rate_limit_info", {}),
-            )
-
-        return None
+        return etype in (
+            "assistant",
+            "tool_result",
+            "result",
+            "rate_limit_event",
+            "user",
+        )
 
     async def request_approval(
         self,
@@ -566,16 +612,17 @@ class SessionManager:
         self.persist_session(session_id)
 
         # Broadcast approval request to connected clients
-        ws_msg = WSMessage(
-            type=WSMessageType.APPROVAL_REQUEST,
-            data={
+        approval_event = {
+            "type": "approval_request",
+            "data": {
                 "tool_name": tool_name,
                 "tool_input": tool_input,
                 "description": f"{tool_name} wants to run",
             },
-        )
-        session.messages.append(ws_msg.model_dump(mode="json"))
-        await self._broadcast(session_id, ws_msg)
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        session.messages.append(approval_event)
+        await self._broadcast(session_id, approval_event)
 
         # Send push notification for approval request
         if self.push_mgr:
@@ -692,13 +739,13 @@ class SessionManager:
         if callback in subs:
             subs.remove(callback)
 
-    async def _broadcast(self, session_id: str, msg: WSMessage) -> None:
+    async def _broadcast(self, session_id: str, event: dict) -> None:
         for cb in self.ws_subscribers.get(session_id, []):
             try:
                 if asyncio.iscoroutinefunction(cb):
-                    await cb(msg)
+                    await cb(event)
                 else:
-                    cb(msg)
+                    cb(event)
             except Exception as e:
                 logger.error(f"WebSocket broadcast error: {e}")
 
