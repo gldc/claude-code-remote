@@ -334,11 +334,18 @@ class SessionManager:
         The JSONL file is the source of truth — both CCR and terminal write to it.
         If the user continued a session in the terminal, those messages only exist
         in the JSONL. This method merges them into session.messages.
+
+        Only syncs when the session is NOT actively running — during active sessions,
+        the WebSocket stream is the source of truth and syncing would cause races.
         """
         if not self.native_reader:
             return
         session = self.sessions.get(session_id)
         if not session or not session.claude_session_id:
+            return
+
+        # Don't sync while actively running — WebSocket stream is source of truth
+        if session.status in (SessionStatus.RUNNING, SessionStatus.AWAITING_APPROVAL):
             return
 
         jsonl_messages, total = self.native_reader.get_session_messages(
