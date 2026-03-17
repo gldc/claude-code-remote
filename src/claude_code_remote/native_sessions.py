@@ -273,12 +273,66 @@ class NativeSessionReader:
         cached = self._cache.get(session_id)
         return cached.summary if cached else None
 
+    @staticmethod
+    def _flatten_content(content) -> str:
+        """Convert native tool_result content to a plain string.
+
+        Content can be a string, or an array of {"type": "text", "text": "..."}
+        objects (sometimes mixed with tool_reference objects).
+        """
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "\n".join(
+                item.get("text", "")
+                for item in content
+                if isinstance(item, dict) and item.get("type") == "text"
+            )
+        return str(content) if content else ""
+
+    def _normalize_event(self, event: dict) -> list[dict]:
+        """Normalize a native JSONL event to stream-JSON format.
+
+        user events with string content pass through as-is.
+        user events with array content have tool_result items extracted
+        as top-level events (matching stream-JSON format).
+        All other event types pass through unchanged.
+        """
+        if event.get("type") != "user":
+            return [event]
+
+        content = event.get("message", {}).get("content")
+        if isinstance(content, str):
+            return [event]
+
+        if not isinstance(content, list):
+            return [event]
+
+        # Extract tool_result items as top-level events
+        ts = event.get("timestamp")
+        results = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "tool_result":
+                results.append(
+                    {
+                        "type": "tool_result",
+                        "content": self._flatten_content(item.get("content", "")),
+                        "tool_use_id": item.get("tool_use_id", ""),
+                        "is_error": item.get("is_error", False),
+                        "timestamp": ts,
+                    }
+                )
+        return results
+
     def get_session_messages(
         self, session_id: str, offset: int = 0, limit: int = 100
     ) -> tuple[list[dict], int]:
         """Get paginated messages for a session.
 
-        Returns (messages, total_count) where messages are only displayed types.
+        Returns (messages, total_count) where messages are normalized to
+        stream-JSON format (tool_results extracted from user array content).
         """
         self._scan_sessions()
         jsonl_path = self._session_paths.get(session_id)
@@ -297,7 +351,7 @@ class NativeSessionReader:
                     except json.JSONDecodeError:
                         continue
                     if event.get("type") in self.DISPLAYED_TYPES:
-                        messages.append(event)
+                        messages.extend(self._normalize_event(event))
         except OSError:
             return [], 0
 

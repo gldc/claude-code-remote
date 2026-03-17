@@ -72,21 +72,27 @@ class SessionManager:
     @staticmethod
     def _to_summary(s: Session) -> SessionSummary:
         preview = None
-        if s.messages:
-            last = s.messages[-1]
-            msg_type = last.get("type")
+        for msg in reversed(s.messages):
+            msg_type = msg.get("type")
             if msg_type == "assistant":
-                for block in last.get("message", {}).get("content", []):
+                for block in msg.get("message", {}).get("content", []):
                     if block.get("type") == "text":
                         preview = block.get("text", "")[:100]
                         break
+                if preview:
+                    break
             elif msg_type == "user":
-                content = last.get("message", {}).get("content", "")
-                preview = (content if isinstance(content, str) else str(content))[:100]
+                content = msg.get("message", {}).get("content", "")
+                if isinstance(content, str) and content.strip():
+                    preview = content[:100]
+                    break
+                # Array content = internal protocol, skip
             elif msg_type == "tool_result":
-                preview = str(last.get("content", ""))[:100]
+                preview = str(msg.get("content", ""))[:100]
+                break
             elif msg_type == "result":
-                preview = "Completed" if last.get("subtype") == "success" else "Error"
+                preview = "Completed" if msg.get("subtype") == "success" else "Error"
+                break
         return SessionSummary(
             id=s.id,
             name=s.name,
