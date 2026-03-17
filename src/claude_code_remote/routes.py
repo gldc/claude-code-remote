@@ -16,6 +16,7 @@ from starlette.responses import Response
 from claude_code_remote.models import (
     SessionCreate,
     SessionUpdate,
+    SessionSummary,
     TemplateCreate,
     Project,
     ProjectRegister,
@@ -39,6 +40,8 @@ from claude_code_remote.models import (
     UploadedFile,
     UploadResponse,
 )
+from claude_code_remote.native_sessions import NativeSessionReader
+from claude_code_remote.hidden_sessions import HiddenSessionsStore
 from starlette.requests import Request
 
 from claude_code_remote.session_manager import SessionManager
@@ -139,6 +142,9 @@ def create_router(
     project_store: ProjectStore | None = None,
     cron_mgr=None,
     show_cost: bool = False,
+    native_reader: NativeSessionReader | None = None,
+    hidden_store: HiddenSessionsStore | None = None,
+    native_max_age_days: int = 7,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -210,6 +216,52 @@ def create_router(
                 or full.owner == identity
                 or identity in full.collaborators
             ]
+
+        # Merge native sessions
+        if native_reader and not status:
+            # Collect claude_session_ids from CCR sessions to deduplicate
+            ccr_claude_ids: set[str] = set()
+            for s in sessions:
+                full = session_mgr.get_session(s.id)
+                if full and full.claude_session_id:
+                    ccr_claude_ids.add(full.claude_session_id)
+
+            hidden_ids = set(hidden_store.list_hidden()) if hidden_store else set()
+            is_archived = archived is True
+            native_sessions = native_reader.list_sessions(
+                max_age_days=None if is_archived else native_max_age_days,
+                hidden_ids=hidden_ids,
+                archived=is_archived,
+            )
+
+            for ns in native_sessions:
+                if ns.id in ccr_claude_ids:
+                    continue
+                if project_dir and project_dir.lower() not in ns.project_dir.lower():
+                    continue
+                active_pid = native_reader.get_active_pid(ns.id)
+                sessions.append(
+                    SessionSummary(
+                        id=ns.id,
+                        name=ns.name,
+                        project_dir=ns.project_dir,
+                        status=SessionStatus.RUNNING
+                        if active_pid
+                        else SessionStatus.IDLE,
+                        model=None,
+                        created_at=ns.created_at,
+                        updated_at=ns.updated_at,
+                        total_cost_usd=ns.total_cost_usd,
+                        current_model=ns.current_model,
+                        git_branch=ns.git_branch,
+                        message_count=ns.message_count,
+                        source="native",
+                        native_pid=active_pid,
+                    )
+                )
+
+        # Sort by updated_at descending
+        sessions.sort(key=lambda s: s.updated_at, reverse=True)
         return sessions
 
     @router.post("/sessions", status_code=201)
@@ -245,9 +297,23 @@ def create_router(
     async def get_session(session_id: str, request: Request):
         _check_session_access(session_id, request)
         session = session_mgr.get_session(session_id)
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
-        return session
+        if session:
+            return session
+
+        # Fall through to native session
+        if native_reader:
+            native = native_reader.get_session(session_id)
+            if native:
+                messages, total = native_reader.get_session_messages(session_id)
+                active_pid = native_reader.get_active_pid(session_id)
+                return {
+                    **native.model_dump(),
+                    "messages": messages,
+                    "total_messages": total,
+                    "native_pid": active_pid,
+                }
+
+        raise HTTPException(status_code=404, detail="Session not found")
 
     @router.get("/sessions/{session_id}/export")
     async def export_session(session_id: str, request: Request):
@@ -284,12 +350,57 @@ def create_router(
         session_mgr.archive_session(session_id, archived=False)
         return {"ok": True}
 
+    @router.post("/sessions/{session_id}/hide")
+    async def hide_session(session_id: str, permanent: bool = False):
+        if not hidden_store:
+            raise HTTPException(503, "Hidden sessions store not configured")
+        hidden_store.hide(session_id, permanent=permanent)
+        return {"ok": True}
+
+    @router.post("/sessions/{session_id}/unhide")
+    async def unhide_session(session_id: str):
+        if not hidden_store:
+            raise HTTPException(503, "Hidden sessions store not configured")
+        hidden_store.unhide(session_id)
+        return {"ok": True}
+
     @router.post("/sessions/{session_id}/send")
     async def send_prompt(session_id: str, body: SendPromptRequest, request: Request):
-        _check_session_access(session_id, request)
         session = session_mgr.get_session(session_id)
+
+        if not session and native_reader:
+            native = native_reader.get_session(session_id)
+            if not native:
+                raise HTTPException(status_code=404, detail="Session not found")
+
+            active_pid = native_reader.get_active_pid(session_id)
+            if active_pid:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Session is active in terminal (PID {active_pid}). Close it first.",
+                )
+
+            identity = _get_caller_identity(request)
+            try:
+                adopted = session_mgr.create_session(
+                    SessionCreate(
+                        name=native.name,
+                        project_dir=native.project_dir,
+                        initial_prompt="",
+                    ),
+                    owner=identity,
+                )
+            except (ValueError, RuntimeError) as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            adopted.claude_session_id = native.claude_session_id
+            session_mgr.persist_session(adopted.id)
+            await session_mgr.send_prompt(adopted.id, body.prompt)
+            return {"ok": True, "adopted": True, "new_session_id": adopted.id}
+
         if not session:
             raise HTTPException(status_code=404, detail="Session not found")
+
+        _check_session_access(session_id, request)
         await session_mgr.send_prompt(session_id, body.prompt)
         return {"ok": True}
 

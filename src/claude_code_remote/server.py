@@ -25,6 +25,7 @@ from claude_code_remote.config import (
     WORKFLOW_DIR,
     CRON_DIR,
     CRON_HISTORY_FILE,
+    HIDDEN_SESSIONS_FILE,
 )
 from claude_code_remote.session_manager import SessionManager
 from claude_code_remote.templates import TemplateStore
@@ -39,6 +40,7 @@ from claude_code_remote.routes import create_router
 from claude_code_remote.websocket import create_ws_router
 from claude_code_remote.terminal import TerminalManager, create_terminal_router
 from claude_code_remote.native_sessions import NativeSessionReader
+from claude_code_remote.hidden_sessions import HiddenSessionsStore
 from claude_code_remote.dashboard import create_dashboard_router
 
 logger = logging.getLogger(__name__)
@@ -73,6 +75,7 @@ def create_app(
     )
     terminal_mgr = TerminalManager()
     native_reader = NativeSessionReader()
+    hidden_store = HiddenSessionsStore(HIDDEN_SESSIONS_FILE)
     scan_dirs = config.get("scan_directories", ["~/Developer"])
 
     @asynccontextmanager
@@ -111,6 +114,9 @@ def create_app(
         project_store=project_store,
         cron_mgr=cron_mgr,
         show_cost=config.get("show_cost", False),
+        native_reader=native_reader,
+        hidden_store=hidden_store,
+        native_max_age_days=config.get("native_max_age_days", 7),
     )
     app.include_router(api_router, prefix="/api")
 
