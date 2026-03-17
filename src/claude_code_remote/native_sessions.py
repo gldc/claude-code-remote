@@ -58,7 +58,7 @@ class _CachedMetadata:
 class NativeSessionReader:
     """Reads native Claude Code sessions from the local filesystem."""
 
-    DISPLAYED_TYPES = {"user", "assistant", "system"}
+    DISPLAYED_TYPES = {"user", "assistant", "tool_result"}
 
     def __init__(self, claude_dir: Path | None = None):
         self._claude_dir = claude_dir or Path.home() / ".claude"
@@ -185,6 +185,11 @@ class NativeSessionReader:
                 continue
         return active
 
+    def get_active_pid(self, session_id: str) -> int | None:
+        """Return the PID if this session is currently running natively, else None."""
+        active = self._load_active_sessions()
+        return active.get(session_id)
+
     def _scan_sessions(self) -> None:
         """Scan projects directory and update cache."""
         if not self._projects_dir.exists():
@@ -226,14 +231,37 @@ class NativeSessionReader:
             del self._cache[stale_id]
             self._session_paths.pop(stale_id, None)
 
-    def list_sessions(self) -> list[DashboardSessionSummary]:
-        """List all native sessions with cached metadata, excluding temp dirs."""
+    def list_sessions(
+        self,
+        max_age_days: int | None = None,
+        hidden_ids: set[str] | None = None,
+        archived: bool = False,
+    ) -> list[DashboardSessionSummary]:
+        """List native sessions with optional recency and visibility filters."""
         self._scan_sessions()
-        return [
-            c.summary
-            for c in self._cache.values()
-            if c.summary.project_dir not in _HIDDEN_PROJECT_DIRS
-        ]
+
+        now = datetime.now(timezone.utc)
+        results = []
+        for c in self._cache.values():
+            s = c.summary
+            if s.project_dir in _HIDDEN_PROJECT_DIRS:
+                continue
+
+            is_hidden = hidden_ids and s.id in hidden_ids
+
+            if archived:
+                if not is_hidden:
+                    continue
+            else:
+                if is_hidden:
+                    continue
+                if max_age_days is not None:
+                    age = now - s.updated_at
+                    if age.days > max_age_days:
+                        continue
+
+            results.append(s)
+        return results
 
     def get_session(self, session_id: str) -> DashboardSessionSummary | None:
         """Get metadata for a single session."""
