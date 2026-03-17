@@ -344,8 +344,12 @@ class SessionManager:
         if not session or not session.claude_session_id:
             return
 
-        # Don't sync while actively running — WebSocket stream is source of truth
-        if session.status in (SessionStatus.RUNNING, SessionStatus.AWAITING_APPROVAL):
+        # Don't sync while a CLI subprocess is actively streaming — it's the
+        # live source of truth and syncing would cause races. But DO sync when
+        # there's no active subprocess, even if status is "running" (the user
+        # may have continued the session in the terminal between CCR turns).
+        proc = self.processes.get(session_id)
+        if proc and proc.returncode is None:
             return
 
         # Compare timestamps to detect new content (count-based comparison
