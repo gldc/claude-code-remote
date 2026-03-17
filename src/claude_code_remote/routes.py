@@ -234,12 +234,15 @@ def create_router(
                 archived=is_archived,
             )
 
+            # Load active PIDs once for the entire list (avoids N+1 reads)
+            active_pids = native_reader.load_active_pids()
+
             for ns in native_sessions:
                 if ns.id in ccr_claude_ids:
                     continue
                 if project_dir and project_dir.lower() not in ns.project_dir.lower():
                     continue
-                active_pid = native_reader.get_active_pid(ns.id)
+                active_pid = active_pids.get(ns.id)
                 sessions.append(
                     SessionSummary(
                         id=ns.id,

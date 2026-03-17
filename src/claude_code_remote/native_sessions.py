@@ -185,6 +185,10 @@ class NativeSessionReader:
                 continue
         return active
 
+    def load_active_pids(self) -> dict[str, int]:
+        """Return a map of session_id -> PID for all currently active native sessions."""
+        return self._load_active_sessions()
+
     def get_active_pid(self, session_id: str) -> int | None:
         """Return the PID if this session is currently running natively, else None."""
         active = self._load_active_sessions()
